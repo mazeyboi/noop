@@ -188,7 +188,10 @@ struct RootTabView: View {
                 routedPillar = dest
                 router.requestedDestination = nil
             case .coach:
-                routedPillar = dest
+                var coachPath = NavigationPath()
+                coachPath.append(MoreDestination.coach)
+                tabPaths[4] = coachPath
+                withAnimation(.timingCurve(0.22, 1, 0.36, 1, duration: 0.24)) { selectedTab = 4 }
                 router.requestedDestination = nil
             case .trends:
                 // Trends is a primary tab on iPhone (not a pillar sheet) — switch to it.
@@ -266,7 +269,7 @@ struct RootTabView: View {
                 case .fusedRecord: FusedRecordHost()
                 case .rhythm: RhythmHost(onClose: { routedPillar = nil })
                 case .devices: DevicesView()
-                // K5: the scheduled morning-brief notification's tap-through target.
+                // Scheduled brief notifications and Today's Coach launcher both route here.
                 case .coach: CoachView()
                 // .trends is never presented as a pillar sheet on iPhone (it's a primary tab — the
                 // requestedDestination handler switches `selectedTab` instead), but the switch must stay
@@ -281,9 +284,6 @@ struct RootTabView: View {
                 // .journal opens through the quick-action Journal sheet (handled above); this keeps the
                 // switch exhaustive and falls back to the journal's Insights host if it ever reaches here.
                 case .journal: InsightsView()
-                // #1862: Coach IS presented here — the launcher sheet routes to it as a pillar, so unlike
-                // the fallbacks above this arm is the real destination, not a safety net.
-                case .coach: CoachView()
                 }
             }
             // The Trends/Today fallbacks above emit TabRoute value pushes (#198), which need a
