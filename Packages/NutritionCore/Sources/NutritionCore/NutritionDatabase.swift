@@ -356,7 +356,7 @@ private func entryUpdateArguments(_ entry: NutritionLogEntry) -> StatementArgume
 private func entryArguments(_ entry: NutritionLogEntry, includeIDFirst: Bool = true) -> StatementArguments {
     var values: [DatabaseValueConvertible?] = []
     if includeIDFirst { values.append(entry.id.uuidString) }
-    values.append(contentsOf: [
+    let rest: [DatabaseValueConvertible?] = [
         entry.foodID?.uuidString,
         entry.localDate,
         entry.meal.rawValue,
@@ -374,7 +374,8 @@ private func entryArguments(_ entry: NutritionLogEntry, includeIDFirst: Bool = t
         entry.macros.carbohydrates,
         entry.macros.fat,
         entry.loggedAt.timeIntervalSince1970,
-    ])
+    ]
+    values.append(contentsOf: rest)
     return StatementArguments(values)
 }
 
