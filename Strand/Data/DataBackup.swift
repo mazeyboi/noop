@@ -529,13 +529,13 @@ enum DataBackup {
             }
 
             do {
-                replaceDatabase(at: dbURL, with: source)
+                try replaceDatabase(at: dbURL, with: source)
                 if let complaint = DatabaseIntegrity.quickCheckFailure(atPath: dbURL.path) {
                     throw RestoreSwapFailure(complaint: "the main database failed its post-restore integrity check (\(complaint))")
                 }
 
                 if let nutritionSource, let nutritionDBURL {
-                    replaceDatabase(at: nutritionDBURL, with: nutritionSource)
+                    try replaceDatabase(at: nutritionDBURL, with: nutritionSource)
                     if let complaint = DatabaseIntegrity.quickCheckFailure(atPath: nutritionDBURL.path) {
                         throw RestoreSwapFailure(complaint: "the nutrition database failed its post-restore integrity check (\(complaint))")
                     }
