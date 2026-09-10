@@ -21,7 +21,7 @@ final class NutritionController: ObservableObject {
         database = nil
         do {
             let path = try NutritionStorePaths.defaultDatabasePath()
-            Task {
+            Task { @MainActor in
                 do {
                     let opened = try await Task.detached(priority: .userInitiated) {
                         try NutritionDatabase(path: path)

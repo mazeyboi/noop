@@ -413,8 +413,8 @@ final class BackupSyncRoundTripTests: XCTestCase {
         for name in foodRows {
             try await database.saveFood(NutritionFood(
                 name: name,
-                macrosPer100g: NutritionMacros(calories: 100, protein: 1,
-                                                carbohydrates: 20, fat: 1),
+                nutrientsPer100Grams: NutritionMacros(calories: 100, protein: 1,
+                                                      carbohydrates: 20, fat: 1),
                 source: .custom
             ))
         }
