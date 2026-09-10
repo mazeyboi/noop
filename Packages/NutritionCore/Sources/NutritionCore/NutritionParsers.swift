@@ -129,7 +129,7 @@ public enum OpenFoodFactsNormalizer {
             }
         let brand = (product["brands"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
 
-        return NutritionFood(
+        let food = NutritionFood(
             name: name,
             brand: brand?.isEmpty == false ? brand : nil,
             nutrientsPer100Grams: macros,
@@ -137,6 +137,8 @@ public enum OpenFoodFactsNormalizer {
             source: .openFoodFacts,
             barcode: barcode
         )
+        guard food.isValid else { throw OpenFoodFactsError.malformedNutrition }
+        return food
     }
 
     private static func requiredNutritionNumber(_ key: String, in values: [String: Any]) throws -> Double {
@@ -169,7 +171,9 @@ public enum NutritionServingParser {
            let amount = Double(captures[0]),
            let grams = Double(captures[2]),
            amount > 0,
-           grams > 0 {
+           amount <= NutritionLimits.maximumServingAmount,
+           grams > 0,
+           grams <= NutritionLimits.maximumGrams {
             let plural = captures[1].lowercased()
             return NutritionServing(
                 amount: amount,
@@ -184,7 +188,8 @@ public enum NutritionServingParser {
             in: trimmed
         ), captures.count == 1,
            let grams = Double(captures[0]),
-           grams > 0 {
+           grams > 0,
+           grams <= NutritionLimits.maximumGrams {
             return NutritionServing(
                 amount: 1,
                 unitSingular: "serving",

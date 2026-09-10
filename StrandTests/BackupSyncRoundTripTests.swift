@@ -1,4 +1,5 @@
 import XCTest
+import NutritionCore
 import SQLite3
 import ZIPFoundation
 @testable import Strand
@@ -60,11 +61,11 @@ final class BackupSyncRoundTripTests: XCTestCase {
                        "Restored DB should hold exactly the backed-up rows")
     }
 
-    func testBackupThenRestoreReturnsTheSameNutritionRows() throws {
+    func testBackupThenRestoreReturnsTheSameNutritionRows() async throws {
         let sourceDB = tmp.appendingPathComponent("source.sqlite")
         let sourceNutrition = tmp.appendingPathComponent("source-nutrition.sqlite")
         try makeNoopDatabase(at: sourceDB, deviceRows: ["my-whoop"])
-        try makeNutritionDatabase(at: sourceNutrition, foodRows: ["Apple", "Yogurt"])
+        try await makeNutritionDatabase(at: sourceNutrition, foodRows: ["Apple", "Yogurt"])
 
         let backup = tmp.appendingPathComponent("with-nutrition.noopbak")
         try DataBackup.writeBackupForTesting(databaseAt: sourceDB,
@@ -74,7 +75,7 @@ final class BackupSyncRoundTripTests: XCTestCase {
         let liveDB = tmp.appendingPathComponent("live.sqlite")
         let liveNutrition = tmp.appendingPathComponent("live-nutrition.sqlite")
         try makeNoopDatabase(at: liveDB, deviceRows: ["original"])
-        try makeNutritionDatabase(at: liveNutrition, foodRows: ["Old food"])
+        try await makeNutritionDatabase(at: liveNutrition, foodRows: ["Old food"])
 
         let result = DataBackup.restore(from: backup, toDatabaseAt: liveDB.path,
                                         nutritionDatabaseAt: liveNutrition.path)
@@ -83,10 +84,12 @@ final class BackupSyncRoundTripTests: XCTestCase {
             return XCTFail("Restore should succeed for a backup with nutrition data, got \(result)")
         }
         XCTAssertEqual(try deviceRows(in: liveDB), ["my-whoop"])
-        XCTAssertEqual(try nutritionFoodRows(in: liveNutrition), ["Apple", "Yogurt"])
+        let restoredNutrition = try NutritionDatabase(path: liveNutrition.path)
+        let restoredFoods = try await restoredNutrition.searchFoods("", limit: 10)
+        XCTAssertEqual(restoredFoods.map(\.name), ["Apple", "Yogurt"])
     }
 
-    func testLegacyBackupLeavesCurrentNutritionDatabaseUntouched() throws {
+    func testLegacyBackupLeavesCurrentNutritionDatabaseUntouched() async throws {
         let sourceDB = tmp.appendingPathComponent("source.sqlite")
         try makeNoopDatabase(at: sourceDB, deviceRows: ["legacy"])
         let backup = tmp.appendingPathComponent("legacy-without-nutrition.noopbak")
@@ -95,7 +98,7 @@ final class BackupSyncRoundTripTests: XCTestCase {
         let liveDB = tmp.appendingPathComponent("live.sqlite")
         let liveNutrition = tmp.appendingPathComponent("live-nutrition.sqlite")
         try makeNoopDatabase(at: liveDB, deviceRows: ["original"])
-        try makeNutritionDatabase(at: liveNutrition, foodRows: ["Keep me"])
+        try await makeNutritionDatabase(at: liveNutrition, foodRows: ["Keep me"])
 
         let result = DataBackup.restore(from: backup, toDatabaseAt: liveDB.path,
                                         nutritionDatabaseAt: liveNutrition.path)
@@ -104,11 +107,11 @@ final class BackupSyncRoundTripTests: XCTestCase {
         XCTAssertEqual(try nutritionFoodRows(in: liveNutrition), ["Keep me"])
     }
 
-    func testNutritionCopyFailureRollsBackMainDatabase() throws {
+    func testNutritionCopyFailureRollsBackMainDatabase() async throws {
         let sourceDB = tmp.appendingPathComponent("source.sqlite")
         let sourceNutrition = tmp.appendingPathComponent("source-nutrition.sqlite")
         try makeNoopDatabase(at: sourceDB, deviceRows: ["replacement"])
-        try makeNutritionDatabase(at: sourceNutrition, foodRows: ["Replacement food"])
+        try await makeNutritionDatabase(at: sourceNutrition, foodRows: ["Replacement food"])
         let backup = tmp.appendingPathComponent("atomic.noopbak")
         try DataBackup.writeBackupForTesting(databaseAt: sourceDB,
                                              nutritionDatabaseAt: sourceNutrition,
@@ -405,19 +408,17 @@ final class BackupSyncRoundTripTests: XCTestCase {
         try exec(db, "INSERT INTO device (id) VALUES ('android-strap')")
     }
 
-    private func makeNutritionDatabase(at url: URL, foodRows: [String]) throws {
-        var db: OpaquePointer?
-        guard sqlite3_open(url.path, &db) == SQLITE_OK else {
-            throw TestError("open failed: \(url.path)")
-        }
-        defer { sqlite3_close(db) }
-        try exec(db, "CREATE TABLE grdb_migrations (identifier TEXT NOT NULL PRIMARY KEY)")
-        try exec(db, "INSERT INTO grdb_migrations (identifier) VALUES ('nutrition-v1')")
-        try exec(db, "CREATE TABLE nutritionFood (name TEXT NOT NULL PRIMARY KEY)")
-        try exec(db, "CREATE TABLE nutritionLogEntry (id TEXT NOT NULL PRIMARY KEY)")
+    private func makeNutritionDatabase(at url: URL, foodRows: [String]) async throws {
+        let database = try NutritionDatabase(path: url.path)
         for name in foodRows {
-            try exec(db, "INSERT INTO nutritionFood (name) VALUES ('\(name)')")
+            try await database.saveFood(NutritionFood(
+                name: name,
+                macrosPer100g: NutritionMacros(calories: 100, protein: 1,
+                                                carbohydrates: 20, fat: 1),
+                source: .custom
+            ))
         }
+        try await database.checkpointWAL()
     }
 
     private func deviceRows(in url: URL) throws -> [String] {

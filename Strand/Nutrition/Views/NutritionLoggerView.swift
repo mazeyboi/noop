@@ -328,6 +328,9 @@ struct NutritionLoggerView: View {
                                     Text("\(item.quantityDescription) / \(whole(item.macros.calories)) kcal")
                                         .font(StrandFont.caption)
                                         .foregroundStyle(StrandPalette.textSecondary)
+                                    Text("P \(decimal(item.macros.protein)) g / C \(decimal(item.macros.carbohydrates)) g / F \(decimal(item.macros.fat)) g")
+                                        .font(StrandFont.caption)
+                                        .foregroundStyle(StrandPalette.textTertiary)
                                 }
                                 .frame(maxWidth: .infinity, alignment: .leading)
                             }

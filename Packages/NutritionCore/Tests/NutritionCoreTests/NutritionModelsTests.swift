@@ -67,4 +67,12 @@ final class NutritionModelsTests: XCTestCase {
         XCTAssertTrue(NutritionLocalDate.isValid("2026-02-28"))
         XCTAssertFalse(NutritionLocalDate.isValid("2026-02-30"))
     }
+
+    func testServingConversionsRejectOverflowingQuantities() {
+        let serving = NutritionServing(amount: 1, unitSingular: "item", unitPlural: "items", grams: 100)
+
+        XCTAssertNil(serving.grams(forUnitCount: NutritionLimits.maximumServingAmount + 1))
+        XCTAssertNil(serving.grams(forUnitCount: NutritionLimits.maximumGrams))
+        XCTAssertNil(serving.unitCount(forGrams: NutritionLimits.maximumGrams + 1))
+    }
 }

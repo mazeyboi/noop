@@ -12,6 +12,7 @@ public enum NutritionDatabaseError: Error, Equatable {
     case emptyPlate
     case entryNotFound
     case corruptRecord
+    case checkpointBusy
 }
 
 public actor NutritionDatabase {
@@ -42,7 +43,8 @@ public actor NutritionDatabase {
 
     public func checkpointWAL() throws {
         try dbWriter.writeWithoutTransaction { db in
-            try db.execute(sql: "PRAGMA wal_checkpoint(TRUNCATE)")
+            let busy = try Int.fetchOne(db, sql: "PRAGMA wal_checkpoint(TRUNCATE)")
+            guard busy == 0 else { throw NutritionDatabaseError.checkpointBusy }
         }
     }
 

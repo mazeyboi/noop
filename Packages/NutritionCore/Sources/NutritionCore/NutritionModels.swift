@@ -108,13 +108,17 @@ public struct NutritionServing: Codable, Equatable, Sendable {
     }
 
     public func grams(forUnitCount count: Double) -> Double? {
-        guard isValid, count.isFinite, count > 0 else { return nil }
-        return grams * count / amount
+        guard isValid, count.isFinite, count > 0,
+              count <= NutritionLimits.maximumServingAmount else { return nil }
+        let result = grams * count / amount
+        return result.isFinite && result <= NutritionLimits.maximumGrams ? result : nil
     }
 
     public func unitCount(forGrams value: Double) -> Double? {
-        guard isValid, value.isFinite, value > 0 else { return nil }
-        return value * amount / grams
+        guard isValid, value.isFinite, value > 0,
+              value <= NutritionLimits.maximumGrams else { return nil }
+        let result = value * amount / grams
+        return result.isFinite && result <= NutritionLimits.maximumServingAmount ? result : nil
     }
 }
 
@@ -279,7 +283,8 @@ public struct NutritionPlateItem: Identifiable, Codable, Equatable, Sendable {
     }
 
     public mutating func setGrams(_ grams: Double) {
-        guard baseQuantityGrams != nil, grams.isFinite, grams > 0 else { return }
+        guard baseQuantityGrams != nil, grams.isFinite, grams > 0,
+              grams <= NutritionLimits.maximumGrams else { return }
         quantityGrams = grams
     }
 
@@ -390,11 +395,12 @@ public struct NutritionLogEntry: Identifiable, Codable, Equatable, Sendable {
         guard let quantityGrams,
               quantityGrams > 0,
               grams.isFinite,
-              grams > 0 else { return self }
+              grams > 0,
+              grams <= NutritionLimits.maximumGrams else { return self }
         var copy = self
         copy.quantityGrams = grams
         copy.macros = macros.scaled(by: grams / quantityGrams)
-        return copy
+        return copy.macros.isValid ? copy : self
     }
 
     public var quantityDescription: String {

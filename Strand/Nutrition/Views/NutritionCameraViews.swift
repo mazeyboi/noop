@@ -111,7 +111,6 @@ private final class NutritionBarcodeScannerController: UIViewController, AVCaptu
                 onPermissionDenied()
                 return
             }
-            guard viewIfLoaded?.window != nil else { return }
             configureSession()
         }
     }

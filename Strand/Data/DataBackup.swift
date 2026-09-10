@@ -75,7 +75,9 @@ enum DataBackup {
         catch { return .failure(String(localized: "Couldn't locate the NOOP database. \(error.localizedDescription)")) }
 
         let dbURL = URL(fileURLWithPath: dbPath)
-        let nutritionURL = try? URL(fileURLWithPath: NutritionStorePaths.defaultDatabasePath())
+        let nutritionURL: URL
+        do { nutritionURL = try URL(fileURLWithPath: NutritionStorePaths.defaultDatabasePath()) }
+        catch { return .failure(String(localized: "Couldn't locate the nutrition database. \(error.localizedDescription)")) }
         guard FileManager.default.fileExists(atPath: dbPath) else {
             return .failure(String(localized: "There's no NOOP data to export yet. Import or record some first."))
         }
@@ -286,7 +288,9 @@ enum DataBackup {
         catch { return .failure(String(localized: "Couldn't locate the NOOP database. \(error.localizedDescription)")) }
 
         let dbURL = URL(fileURLWithPath: dbPath)
-        let nutritionURL = try? URL(fileURLWithPath: NutritionStorePaths.defaultDatabasePath())
+        let nutritionURL: URL
+        do { nutritionURL = try URL(fileURLWithPath: NutritionStorePaths.defaultDatabasePath()) }
+        catch { return .failure(String(localized: "Couldn't locate the nutrition database. \(error.localizedDescription)")) }
         guard FileManager.default.fileExists(atPath: dbPath) else {
             return .failure(String(localized: "There's no NOOP data to export yet."))
         }

@@ -113,7 +113,7 @@ struct NutritionCustomFoodSheet: View {
         let singular = unitSingular.trimmingCharacters(in: .whitespacesAndNewlines)
         let plural = unitPlural.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !singular.isEmpty, !plural.isEmpty else { return nil }
-        return NutritionFood(
+        let food = NutritionFood(
             id: existing?.id ?? UUID(),
             name: trimmedName,
             brand: normalized(brand),
@@ -130,6 +130,7 @@ struct NutritionCustomFoodSheet: View {
             createdAt: existing?.createdAt ?? Date(),
             updatedAt: Date()
         )
+        return food.isValid ? food : nil
     }
 
     var body: some View {

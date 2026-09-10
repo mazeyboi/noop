@@ -20,7 +20,18 @@ final class NutritionController: ObservableObject {
         summary = NutritionDaySummary(localDate: day, entries: [])
         database = nil
         do {
-            database = try NutritionDatabase(path: NutritionStorePaths.defaultDatabasePath())
+            let path = try NutritionStorePaths.defaultDatabasePath()
+            Task {
+                do {
+                    let opened = try await Task.detached(priority: .userInitiated) {
+                        try NutritionDatabase(path: path)
+                    }.value
+                    self.database = opened
+                    await self.reload(localDate: self.summary.localDate)
+                } catch {
+                    self.errorMessage = "Nutrition storage could not be opened. Your other NOOP data is unaffected."
+                }
+            }
         } catch {
             errorMessage = "Nutrition storage could not be opened. Your other NOOP data is unaffected."
         }
