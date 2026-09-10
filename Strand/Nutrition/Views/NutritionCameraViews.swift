@@ -69,14 +69,21 @@ private struct NutritionBarcodeScannerRepresentable: UIViewControllerRepresentab
     }
 
     func updateUIViewController(_ uiViewController: NutritionBarcodeScannerController, context: Context) {}
+
+    static func dismantleUIViewController(_ uiViewController: NutritionBarcodeScannerController, coordinator: ()) {
+        uiViewController.stopSession()
+    }
 }
 
 private final class NutritionBarcodeScannerController: UIViewController, AVCaptureMetadataOutputObjectsDelegate {
     private let session = AVCaptureSession()
+    private let sessionQueue = DispatchQueue(label: "com.noop.nutrition.barcode-session")
     private let onCode: (String) -> Void
     private let onPermissionDenied: () -> Void
     private var previewLayer: AVCaptureVideoPreviewLayer?
     private var didEmitCode = false
+    private var configured = false
+    private var wantsRunning = false
 
     init(onCode: @escaping (String) -> Void, onPermissionDenied: @escaping () -> Void) {
         self.onCode = onCode
@@ -104,7 +111,17 @@ private final class NutritionBarcodeScannerController: UIViewController, AVCaptu
                 onPermissionDenied()
                 return
             }
+            guard viewIfLoaded?.window != nil else { return }
             configureSession()
+        }
+    }
+
+    override func viewDidAppear(_ animated: Bool) {
+        super.viewDidAppear(animated)
+        sessionQueue.async { [weak self] in
+            guard let self else { return }
+            wantsRunning = true
+            if configured, !session.isRunning { session.startRunning() }
         }
     }
 
@@ -115,33 +132,46 @@ private final class NutritionBarcodeScannerController: UIViewController, AVCaptu
 
     override func viewWillDisappear(_ animated: Bool) {
         super.viewWillDisappear(animated)
-        session.stopRunning()
+        stopSession()
     }
 
     private func configureSession() {
-        guard let device = AVCaptureDevice.default(for: .video),
-              let input = try? AVCaptureDeviceInput(device: device),
-              session.canAddInput(input) else {
-            onPermissionDenied()
-            return
-        }
-        session.addInput(input)
-        let output = AVCaptureMetadataOutput()
-        guard session.canAddOutput(output) else {
-            onPermissionDenied()
-            return
-        }
-        session.addOutput(output)
-        output.setMetadataObjectsDelegate(self, queue: .main)
-        output.metadataObjectTypes = [.ean8, .ean13, .upce, .code128]
-
         let preview = AVCaptureVideoPreviewLayer(session: session)
         preview.videoGravity = .resizeAspectFill
         preview.frame = view.bounds
         view.layer.insertSublayer(preview, at: 0)
         previewLayer = preview
-        DispatchQueue.global(qos: .userInitiated).async { [session] in
-            session.startRunning()
+
+        sessionQueue.async { [weak self] in
+            guard let self, !configured else { return }
+            guard let device = AVCaptureDevice.default(for: .video),
+                  let input = try? AVCaptureDeviceInput(device: device),
+                  session.canAddInput(input) else {
+                DispatchQueue.main.async { self.onPermissionDenied() }
+                return
+            }
+            session.beginConfiguration()
+            session.addInput(input)
+            let output = AVCaptureMetadataOutput()
+            guard session.canAddOutput(output) else {
+                session.commitConfiguration()
+                DispatchQueue.main.async { self.onPermissionDenied() }
+                return
+            }
+            session.addOutput(output)
+            output.setMetadataObjectsDelegate(self, queue: .main)
+            output.metadataObjectTypes = [.ean8, .ean13, .upce, .code128]
+            session.commitConfiguration()
+            configured = true
+            if wantsRunning, !session.isRunning { session.startRunning() }
+        }
+    }
+
+    func stopSession() {
+        sessionQueue.async { [weak self] in
+            guard let self else { return }
+            wantsRunning = false
+            if session.isRunning { session.stopRunning() }
         }
     }
 
@@ -155,7 +185,7 @@ private final class NutritionBarcodeScannerController: UIViewController, AVCaptu
               let code = object.stringValue,
               !code.isEmpty else { return }
         didEmitCode = true
-        session.stopRunning()
+        stopSession()
         onCode(code)
     }
 }

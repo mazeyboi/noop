@@ -45,6 +45,7 @@ struct NutritionLoggerView: View {
     @State private var editingFood: NutritionFood?
     @State private var showingNewFood = false
     @State private var isLogging = false
+    @State private var confirmedEstimateIDs: Set<UUID> = []
 
     init(controller: NutritionController, localDate: String, initialMeal: NutritionMeal) {
         self.controller = controller
@@ -78,21 +79,24 @@ struct NutritionLoggerView: View {
             searchResults = await controller.search(query)
         }
         .sheet(item: $editingPlateItem) { item in
-            NutritionPlateItemEditor(item: item) { plate.replace($0) }
+            NutritionPlateItemEditor(item: item) { edited in
+                plate.replace(edited)
+                if edited.source == .geminiEstimate { confirmedEstimateIDs.insert(edited.id) }
+            }
         }
         .sheet(item: $editingFood) { food in
             NutritionCustomFoodSheet(existing: food) { saved in
-                Task { _ = await controller.saveFood(saved, localDate: localDate) }
+                await controller.saveFood(saved, localDate: localDate)
             }
         }
         .sheet(isPresented: $showingNewFood) {
             NutritionCustomFoodSheet { food in
-                Task {
-                    if await controller.saveFood(food, localDate: localDate) {
-                        let quantity = await controller.lastQuantity(for: food)
-                        await MainActor.run { plate.add(NutritionPlateItem(food: food, quantityGrams: quantity)) }
-                    }
+                guard await controller.saveFood(food, localDate: localDate) else { return false }
+                let quantity = await controller.lastQuantity(for: food)
+                await MainActor.run {
+                    plate.add(NutritionPlateItem(food: food, quantityGrams: quantity))
                 }
+                return true
             }
         }
     }
@@ -130,7 +134,10 @@ struct NutritionLoggerView: View {
             #if os(iOS)
             StrandCard {
                 NutritionAIPhotoView { items in
-                    for item in items { plate.add(item) }
+                    for item in items {
+                        confirmedEstimateIDs.remove(item.id)
+                        plate.add(item)
+                    }
                 }
             }
             #else
@@ -325,7 +332,23 @@ struct NutritionLoggerView: View {
                                 .frame(maxWidth: .infinity, alignment: .leading)
                             }
                             .buttonStyle(.plain)
-                            Button { plate.remove(id: item.id) } label: { Image(systemName: "xmark.circle") }
+                            if item.source == .geminiEstimate {
+                                Button {
+                                    confirmedEstimateIDs.insert(item.id)
+                                } label: {
+                                    Image(systemName: confirmedEstimateIDs.contains(item.id)
+                                          ? "checkmark.circle.fill" : "checkmark.circle")
+                                }
+                                .buttonStyle(.plain)
+                                .foregroundStyle(confirmedEstimateIDs.contains(item.id)
+                                                 ? StrandPalette.accent : StrandPalette.textTertiary)
+                                .accessibilityLabel(confirmedEstimateIDs.contains(item.id)
+                                                    ? "AI estimate confirmed" : "Confirm AI estimate")
+                            }
+                            Button {
+                                confirmedEstimateIDs.remove(item.id)
+                                plate.remove(id: item.id)
+                            } label: { Image(systemName: "xmark.circle") }
                                 .buttonStyle(.plain)
                                 .foregroundStyle(StrandPalette.textTertiary)
                                 .accessibilityLabel("Remove \(item.name)")
@@ -345,6 +368,12 @@ struct NutritionLoggerView: View {
             .pickerStyle(.segmented)
             .tint(StrandPalette.accent)
 
+            if hasUnconfirmedEstimates {
+                Text("Review or confirm every AI estimate before logging.")
+                    .font(StrandFont.footnote)
+                    .foregroundStyle(StrandPalette.textSecondary)
+            }
+
             NoopButton(
                 isLogging ? "Logging..." : "Log Foods",
                 systemImage: "checkmark",
@@ -353,7 +382,7 @@ struct NutritionLoggerView: View {
             ) {
                 logPlate()
             }
-            .disabled(isLogging)
+            .disabled(isLogging || hasUnconfirmedEstimates)
         }
     }
 
@@ -385,6 +414,7 @@ struct NutritionLoggerView: View {
     }
 
     private func logPlate() {
+        guard !hasUnconfirmedEstimates else { return }
         isLogging = true
         Task {
             let logged = await controller.log(plate, localDate: localDate)
@@ -397,6 +427,12 @@ struct NutritionLoggerView: View {
 
     private func excluding(_ foods: [NutritionFood], ids: Set<UUID>) -> [NutritionFood] {
         foods.filter { !ids.contains($0.id) }
+    }
+
+    private var hasUnconfirmedEstimates: Bool {
+        plate.items.contains {
+            $0.source == .geminiEstimate && !confirmedEstimateIDs.contains($0.id)
+        }
     }
 
     private func unavailableFeature(_ message: String) -> some View {
@@ -419,11 +455,22 @@ private struct NutritionBarcodeLookupView: View {
     @State private var grams = ""
     @State private var isLoading = false
     @State private var errorMessage: String?
+    @AppStorage("noop.nutrition.openFoodFactsConsent") private var lookupConsent = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: NoopMetrics.space4) {
             Text("Packaged food").strandOverline()
-            NoopButton("Scan Barcode", systemImage: "barcode.viewfinder", kind: .secondary, fullWidth: true) {
+            Text("A scan is processed on-device. For products not already in your library, the barcode and your network address are sent to Open Food Facts for lookup.")
+                .font(StrandFont.footnote)
+                .foregroundStyle(StrandPalette.textSecondary)
+                .fixedSize(horizontal: false, vertical: true)
+            NoopButton(
+                lookupConsent ? "Scan Barcode" : "Allow Lookup and Scan",
+                systemImage: "barcode.viewfinder",
+                kind: .secondary,
+                fullWidth: true
+            ) {
+                lookupConsent = true
                 showingScanner = true
             }
 

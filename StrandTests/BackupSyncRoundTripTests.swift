@@ -60,6 +60,72 @@ final class BackupSyncRoundTripTests: XCTestCase {
                        "Restored DB should hold exactly the backed-up rows")
     }
 
+    func testBackupThenRestoreReturnsTheSameNutritionRows() throws {
+        let sourceDB = tmp.appendingPathComponent("source.sqlite")
+        let sourceNutrition = tmp.appendingPathComponent("source-nutrition.sqlite")
+        try makeNoopDatabase(at: sourceDB, deviceRows: ["my-whoop"])
+        try makeNutritionDatabase(at: sourceNutrition, foodRows: ["Apple", "Yogurt"])
+
+        let backup = tmp.appendingPathComponent("with-nutrition.noopbak")
+        try DataBackup.writeBackupForTesting(databaseAt: sourceDB,
+                                             nutritionDatabaseAt: sourceNutrition,
+                                             to: backup)
+
+        let liveDB = tmp.appendingPathComponent("live.sqlite")
+        let liveNutrition = tmp.appendingPathComponent("live-nutrition.sqlite")
+        try makeNoopDatabase(at: liveDB, deviceRows: ["original"])
+        try makeNutritionDatabase(at: liveNutrition, foodRows: ["Old food"])
+
+        let result = DataBackup.restore(from: backup, toDatabaseAt: liveDB.path,
+                                        nutritionDatabaseAt: liveNutrition.path)
+
+        guard case .imported = result else {
+            return XCTFail("Restore should succeed for a backup with nutrition data, got \(result)")
+        }
+        XCTAssertEqual(try deviceRows(in: liveDB), ["my-whoop"])
+        XCTAssertEqual(try nutritionFoodRows(in: liveNutrition), ["Apple", "Yogurt"])
+    }
+
+    func testLegacyBackupLeavesCurrentNutritionDatabaseUntouched() throws {
+        let sourceDB = tmp.appendingPathComponent("source.sqlite")
+        try makeNoopDatabase(at: sourceDB, deviceRows: ["legacy"])
+        let backup = tmp.appendingPathComponent("legacy-without-nutrition.noopbak")
+        try DataBackup.writeBackupForTesting(databaseAt: sourceDB, to: backup)
+
+        let liveDB = tmp.appendingPathComponent("live.sqlite")
+        let liveNutrition = tmp.appendingPathComponent("live-nutrition.sqlite")
+        try makeNoopDatabase(at: liveDB, deviceRows: ["original"])
+        try makeNutritionDatabase(at: liveNutrition, foodRows: ["Keep me"])
+
+        let result = DataBackup.restore(from: backup, toDatabaseAt: liveDB.path,
+                                        nutritionDatabaseAt: liveNutrition.path)
+
+        guard case .imported = result else { return XCTFail("Legacy restore failed: \(result)") }
+        XCTAssertEqual(try nutritionFoodRows(in: liveNutrition), ["Keep me"])
+    }
+
+    func testNutritionCopyFailureRollsBackMainDatabase() throws {
+        let sourceDB = tmp.appendingPathComponent("source.sqlite")
+        let sourceNutrition = tmp.appendingPathComponent("source-nutrition.sqlite")
+        try makeNoopDatabase(at: sourceDB, deviceRows: ["replacement"])
+        try makeNutritionDatabase(at: sourceNutrition, foodRows: ["Replacement food"])
+        let backup = tmp.appendingPathComponent("atomic.noopbak")
+        try DataBackup.writeBackupForTesting(databaseAt: sourceDB,
+                                             nutritionDatabaseAt: sourceNutrition,
+                                             to: backup)
+
+        let liveDB = tmp.appendingPathComponent("live.sqlite")
+        try makeNoopDatabase(at: liveDB, deviceRows: ["original"])
+        let unavailableNutritionPath = tmp.appendingPathComponent("missing-parent/nutrition.sqlite").path
+
+        let result = DataBackup.restore(from: backup, toDatabaseAt: liveDB.path,
+                                        nutritionDatabaseAt: unavailableNutritionPath)
+
+        guard case .failure = result else { return XCTFail("The second copy should fail, got \(result)") }
+        XCTAssertEqual(try deviceRows(in: liveDB), ["original"],
+                       "A nutrition copy failure must roll the primary database back")
+    }
+
     // MARK: - Settings round trip (#1000: restore brings back weight/height/settings)
 
     func testBackupWithSettingsRestoresSettingsAfterDbSwap() throws {
@@ -339,6 +405,21 @@ final class BackupSyncRoundTripTests: XCTestCase {
         try exec(db, "INSERT INTO device (id) VALUES ('android-strap')")
     }
 
+    private func makeNutritionDatabase(at url: URL, foodRows: [String]) throws {
+        var db: OpaquePointer?
+        guard sqlite3_open(url.path, &db) == SQLITE_OK else {
+            throw TestError("open failed: \(url.path)")
+        }
+        defer { sqlite3_close(db) }
+        try exec(db, "CREATE TABLE grdb_migrations (identifier TEXT NOT NULL PRIMARY KEY)")
+        try exec(db, "INSERT INTO grdb_migrations (identifier) VALUES ('nutrition-v1')")
+        try exec(db, "CREATE TABLE nutritionFood (name TEXT NOT NULL PRIMARY KEY)")
+        try exec(db, "CREATE TABLE nutritionLogEntry (id TEXT NOT NULL PRIMARY KEY)")
+        for name in foodRows {
+            try exec(db, "INSERT INTO nutritionFood (name) VALUES ('\(name)')")
+        }
+    }
+
     private func deviceRows(in url: URL) throws -> [String] {
         var db: OpaquePointer?
         guard sqlite3_open_v2(url.path, &db, SQLITE_OPEN_READONLY, nil) == SQLITE_OK else {
@@ -355,6 +436,24 @@ final class BackupSyncRoundTripTests: XCTestCase {
             if let c = sqlite3_column_text(stmt, 0) { rows.append(String(cString: c)) }
         }
         return rows.sorted()
+    }
+
+    private func nutritionFoodRows(in url: URL) throws -> [String] {
+        var db: OpaquePointer?
+        guard sqlite3_open_v2(url.path, &db, SQLITE_OPEN_READONLY, nil) == SQLITE_OK else {
+            throw TestError("open (read) failed: \(url.path)")
+        }
+        defer { sqlite3_close(db) }
+        var stmt: OpaquePointer?
+        guard sqlite3_prepare_v2(db, "SELECT name FROM nutritionFood ORDER BY name", -1, &stmt, nil) == SQLITE_OK else {
+            throw TestError("prepare failed")
+        }
+        defer { sqlite3_finalize(stmt) }
+        var rows: [String] = []
+        while sqlite3_step(stmt) == SQLITE_ROW {
+            if let c = sqlite3_column_text(stmt, 0) { rows.append(String(cString: c)) }
+        }
+        return rows
     }
 
     private func exec(_ db: OpaquePointer?, _ sql: String) throws {

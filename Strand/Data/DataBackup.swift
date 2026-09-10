@@ -6,14 +6,15 @@ import UIKit
 #endif
 import SQLite3
 import UniformTypeIdentifiers
+import NutritionCore
 import WhoopStore
 import ZIPFoundation
 
 /// Full-database EXPORT / IMPORT for device migration.
 ///
-/// NOOP keeps everything in one SQLite file (`<AppSupport>/OpenWhoop/whoop.sqlite`, plus the
-/// `-wal`/`-shm` WAL sidecars while the store is open). Export checkpoints the WAL (so the
-/// single file is whole), then wraps the SQLite in a ZIP written as `.noopbak`, alongside a
+/// NOOP's primary store is `<AppSupport>/OpenWhoop/whoop.sqlite`; Nutrition uses a separate
+/// `Nutrition/nutrition.sqlite`. Export checkpoints each existing store, then wraps them in a ZIP
+/// written as `.noopbak`, alongside a
 /// small `settings.json` entry (#1000) carrying the whitelisted profile/display settings (see
 /// `BackupSettings`) so a restore also brings back weight/height/units, not just the rows.
 /// ZIP deflate typically cuts a 100 MB+ SQLite backup to 10–20 MB. The format is a standard
@@ -61,8 +62,7 @@ enum DataBackup {
 
     // MARK: - Export
 
-    /// Checkpoint the store and write the live database as a compressed `.noopbak` (single-entry
-    /// ZIP) to a user-chosen file.
+    /// Checkpoint the stores and write the live databases as a compressed `.noopbak` ZIP.
     ///
     /// - Parameter checkpoint: invoked first to flush the WAL into the main file. Pass
     ///   `repo.checkpointForBackup`. Must succeed — a failed checkpoint means committed pages still
@@ -75,6 +75,7 @@ enum DataBackup {
         catch { return .failure(String(localized: "Couldn't locate the NOOP database. \(error.localizedDescription)")) }
 
         let dbURL = URL(fileURLWithPath: dbPath)
+        let nutritionURL = try? URL(fileURLWithPath: NutritionStorePaths.defaultDatabasePath())
         guard FileManager.default.fileExists(atPath: dbPath) else {
             return .failure(String(localized: "There's no NOOP data to export yet. Import or record some first."))
         }
@@ -83,6 +84,9 @@ enum DataBackup {
         // fallback in a single-file archive).
         guard await checkpoint() else {
             return .failure(String(localized: "Couldn't safely export right now. Recent changes are still in the database's write-ahead log. Close any in-flight sync, then try again."))
+        }
+        guard await checkpointNutritionDatabaseIfPresent(at: nutritionURL) else {
+            return .failure(String(localized: "Couldn't safely export nutrition data. Recent changes are still in its write-ahead log. Close any in-flight edit, then try again."))
         }
 
         #if os(macOS)
@@ -107,9 +111,11 @@ enum DataBackup {
             // (and #1014 added a quick_check read of the whole file first); run it off the main
             // actor so the UI never beach-balls. Only file paths cross the hop.
             try await Task.detached(priority: .utility) {
-                try writeVerifiedBackupZip(dbURL: dbURL, to: dest, settingsJSON: currentSettingsJSON())
+                try writeVerifiedBackupZip(dbURL: dbURL, nutritionURL: existingFile(nutritionURL),
+                                           to: dest, settingsJSON: currentSettingsJSON())
             }.value
-            return exportOutcome(dest, dbURL: dbURL)
+            return exportOutcome(dest, databaseURLs: backupDatabaseURLs(primary: dbURL,
+                                                                        nutrition: nutritionURL))
         } catch {
             return .failure(String(localized: "Export failed: \(error.localizedDescription)"))
         }
@@ -122,13 +128,15 @@ enum DataBackup {
             if fm.fileExists(atPath: staged.path) { try fm.removeItem(at: staged) }
             // Off the main actor: same reason as the macOS branch (heavy read + DEFLATE). Only paths hop.
             try await Task.detached(priority: .utility) {
-                try writeVerifiedBackupZip(dbURL: dbURL, to: staged, settingsJSON: currentSettingsJSON())
+                try writeVerifiedBackupZip(dbURL: dbURL, nutritionURL: existingFile(nutritionURL),
+                                           to: staged, settingsJSON: currentSettingsJSON())
             }.value
         } catch {
             return .failure(String(localized: "Export failed: \(error.localizedDescription)"))
         }
         guard let dest = await DocumentPicker.export(staged) else { return .cancelled }
-        return exportOutcome(dest, dbURL: dbURL)
+        return exportOutcome(dest, databaseURLs: backupDatabaseURLs(primary: dbURL,
+                                                                    nutrition: nutritionURL))
         #endif
     }
 
@@ -163,18 +171,26 @@ enum DataBackup {
     /// enforces. Measured on the DATABASE, not the finished archive: the archive is `.deflate`d and the
     /// cap the restore checks counts the DECOMPRESSED stream, so the zip's own size says nothing about
     /// whether it can be read back. (#1807)
-    private static func exportOutcome(_ dest: URL, dbURL: URL) -> BackupResult {
-        let attrs = try? FileManager.default.attributesOfItem(atPath: dbURL.path)
-        guard let bytes = (attrs?[.size] as? NSNumber)?.int64Value,
-              bytes > maxBackupSQLiteBytes else { return .exported(dest) }
-        return .exportedOversize(dest, bytes: bytes, limit: maxBackupSQLiteBytes)
+    private static func exportOutcome(_ dest: URL, databaseURLs: [URL]) -> BackupResult {
+        let largest = databaseURLs.compactMap { url -> Int64? in
+            let attrs = try? FileManager.default.attributesOfItem(atPath: url.path)
+            return (attrs?[.size] as? NSNumber)?.int64Value
+        }.max() ?? 0
+        guard largest > maxBackupSQLiteBytes else { return .exported(dest) }
+        return .exportedOversize(dest, bytes: largest, limit: maxBackupSQLiteBytes)
     }
 
-    private static func writeVerifiedBackupZip(dbURL: URL, to dest: URL, settingsJSON: Data?) throws {
+    private static func writeVerifiedBackupZip(dbURL: URL, nutritionURL: URL?, to dest: URL,
+                                               settingsJSON: Data?) throws {
         if let complaint = DatabaseIntegrity.quickCheckFailure(atPath: dbURL.path) {
             throw ExportIntegrityFailure(complaint: complaint)
         }
-        try writeBackupZip(dbURL: dbURL, to: dest, settingsJSON: settingsJSON, manifestJSON: currentManifestJSON())
+        if let nutritionURL,
+           let complaint = DatabaseIntegrity.quickCheckFailure(atPath: nutritionURL.path) {
+            throw ExportIntegrityFailure(complaint: "nutrition.sqlite: \(complaint)")
+        }
+        try writeBackupZip(dbURL: dbURL, nutritionURL: nutritionURL, to: dest,
+                           settingsJSON: settingsJSON, manifestJSON: currentManifestJSON())
         // #1014 (write-side): the SOURCE is verified above, but the PRODUCED file can still be torn by a
         // full disk / dying filesystem / flaky cloud-sync mid-write, and such a truncated `.noopbak`
         // otherwise "restores" into an empty store — caught only by the import-side quick_check much later.
@@ -184,14 +200,19 @@ enum DataBackup {
         // corrupt file behind masquerading as a good snapshot. Twin of the Android post-write check.
         guard let written = try? Archive(url: dest, accessMode: .read),
               let dbEntry = written.first(where: { ($0.path as NSString).lastPathComponent == backupEntryName }),
-              dbEntry.uncompressedSize >= 100 else {
+              dbEntry.uncompressedSize >= 100,
+              nutritionURL == nil || written.contains(where: {
+                  ($0.path as NSString).lastPathComponent == nutritionBackupEntryName
+                      && $0.uncompressedSize >= 100
+              }) else {
             try? FileManager.default.removeItem(at: dest)
             throw BackupWriteIncomplete()
         }
     }
 
     /// Write the live SQLite at `dbURL` into a fresh deflate ZIP at `dest`: the DB under the canonical
-    /// entry name `noop-backup.sqlite`, plus (#1000) an optional second entry `settings.json` carrying
+    /// entry name `noop-backup.sqlite`, optional `noop-nutrition.sqlite`, and (#1000) an optional
+    /// `settings.json` entry carrying
     /// the whitelisted profile/display settings, so a restore brings back weight/height/units and not
     /// just the rows. Entry names, entry ORDER (DB first — older importers stop at the first `.sqlite`
     /// entry) and deflate compression match the Android exporter byte-for-byte at the container level,
@@ -208,9 +229,14 @@ enum DataBackup {
         return Data(json.utf8)
     }
 
-    private static func writeBackupZip(dbURL: URL, to dest: URL, settingsJSON: Data?, manifestJSON: Data) throws {
+    private static func writeBackupZip(dbURL: URL, nutritionURL: URL?, to dest: URL,
+                                       settingsJSON: Data?, manifestJSON: Data) throws {
         let archive = try Archive(url: dest, accessMode: .create)
         try archive.addEntry(with: backupEntryName, fileURL: dbURL, compressionMethod: .deflate)
+        if let nutritionURL {
+            try archive.addEntry(with: nutritionBackupEntryName, fileURL: nutritionURL,
+                                 compressionMethod: .deflate)
+        }
         let fm = FileManager.default
         // Stage each JSON through a temp file so it uses the exact same file-URL addEntry idiom as the DB
         // entry (one container code path, no provider-API variant to drift).
@@ -260,6 +286,7 @@ enum DataBackup {
         catch { return .failure(String(localized: "Couldn't locate the NOOP database. \(error.localizedDescription)")) }
 
         let dbURL = URL(fileURLWithPath: dbPath)
+        let nutritionURL = try? URL(fileURLWithPath: NutritionStorePaths.defaultDatabasePath())
         guard FileManager.default.fileExists(atPath: dbPath) else {
             return .failure(String(localized: "There's no NOOP data to export yet."))
         }
@@ -268,11 +295,16 @@ enum DataBackup {
         guard await checkpoint() else {
             return .failure(String(localized: "Couldn't safely back up right now. Recent changes are still in the write-ahead log."))
         }
+        guard await checkpointNutritionDatabaseIfPresent(at: nutritionURL) else {
+            return .failure(String(localized: "Couldn't safely back up nutrition data. Recent changes are still in its write-ahead log."))
+        }
         do {
             let fm = FileManager.default
             if fm.fileExists(atPath: dest.path) { try fm.removeItem(at: dest) }
-            try writeVerifiedBackupZip(dbURL: dbURL, to: dest, settingsJSON: currentSettingsJSON())
-            return exportOutcome(dest, dbURL: dbURL)
+            try writeVerifiedBackupZip(dbURL: dbURL, nutritionURL: existingFile(nutritionURL),
+                                       to: dest, settingsJSON: currentSettingsJSON())
+            return exportOutcome(dest, databaseURLs: backupDatabaseURLs(primary: dbURL,
+                                                                        nutrition: nutritionURL))
         } catch {
             return .failure(String(localized: "Backup failed: \(error.localizedDescription)"))
         }
@@ -283,11 +315,12 @@ enum DataBackup {
     /// `settings` (canonical `BackupSettings` keys) adds the `settings.json` entry; nil writes the
     /// legacy single-entry ZIP — tests cover both shapes. Not used by app code; production goes
     /// through `writeBackup(checkpoint:to:)`.
-    static func writeBackupForTesting(databaseAt dbURL: URL, to dest: URL,
+    static func writeBackupForTesting(databaseAt dbURL: URL, nutritionDatabaseAt nutritionURL: URL? = nil,
+                                      to dest: URL,
                                       settings: [String: Any]? = nil) throws {
         let fm = FileManager.default
         if fm.fileExists(atPath: dest.path) { try fm.removeItem(at: dest) }
-        try writeBackupZip(dbURL: dbURL, to: dest,
+        try writeBackupZip(dbURL: dbURL, nutritionURL: nutritionURL, to: dest,
                            settingsJSON: settings.flatMap { BackupSettings.encode($0) },
                            manifestJSON: currentManifestJSON())
     }
@@ -303,6 +336,9 @@ enum DataBackup {
         let dbPath: String
         do { dbPath = try StorePaths.defaultDatabasePath() }
         catch { return .failure(String(localized: "Couldn't locate the NOOP database. \(error.localizedDescription)")) }
+        let nutritionPath: String
+        do { nutritionPath = try NutritionStorePaths.defaultDatabasePath() }
+        catch { return .failure(String(localized: "Couldn't locate the nutrition database. \(error.localizedDescription)")) }
 
         #if os(macOS)
         let panel = NSOpenPanel()
@@ -331,7 +367,8 @@ enum DataBackup {
         // stays valid because the surrounding function is still awaiting here. Only Sendable value
         // types (URL, String) cross the hop; the result hops back to main for handleBackup.
         return await Task.detached(priority: .utility) {
-            restore(from: pickedSource, toDatabaseAt: dbPath, allowOversize: allowOversize)
+            restore(from: pickedSource, toDatabaseAt: dbPath,
+                    nutritionDatabaseAt: nutritionPath, allowOversize: allowOversize)
         }.value
     }
 
@@ -347,7 +384,10 @@ enum DataBackup {
         let dbPath: String
         do { dbPath = try StorePaths.defaultDatabasePath() }
         catch { return .failure(String(localized: "Couldn't locate the NOOP database. \(error.localizedDescription)")) }
-        return restore(from: pickedSource, toDatabaseAt: dbPath)
+        let nutritionPath: String
+        do { nutritionPath = try NutritionStorePaths.defaultDatabasePath() }
+        catch { return .failure(String(localized: "Couldn't locate the nutrition database. \(error.localizedDescription)")) }
+        return restore(from: pickedSource, toDatabaseAt: dbPath, nutritionDatabaseAt: nutritionPath)
     }
 
     /// The hardened restore core, with the destination database path injected so it is unit-testable
@@ -356,6 +396,7 @@ enum DataBackup {
     /// `settingsDefaults` is where a `settings.json` entry (#1000) is re-applied — injected for the
     /// same reason as `dbPath` (tests use a suite-scoped UserDefaults, never the runner's real domain).
     static func restore(from pickedSource: URL, toDatabaseAt dbPath: String,
+                        nutritionDatabaseAt nutritionPath: String? = nil,
                         settingsDefaults: UserDefaults = .standard,
                         allowOversize: Bool = false) -> BackupResult {
         // If the picked file is a .noopbak ZIP, extract the SQLite entry to a temp dir first.
@@ -383,9 +424,8 @@ enum DataBackup {
                 try? fm.removeItem(at: tmpExtract)
                 return .failure(String(localized: "Couldn't open the backup archive: \(error.localizedDescription)"))
             }
-            guard let sqliteEntry = (try? fm.contentsOfDirectory(
-                at: tmpExtract, includingPropertiesForKeys: nil))?
-                .first(where: { $0.pathExtension == "sqlite" }) else {
+            let sqliteEntry = tmpExtract.appendingPathComponent(backupEntryName)
+            guard fm.fileExists(atPath: sqliteEntry.path) else {
                 try? fm.removeItem(at: tmpExtract)
                 return .failure(String(localized: "The backup archive doesn't contain a database file."))
             }
@@ -396,6 +436,12 @@ enum DataBackup {
             extractedDir = nil
         }
         defer { if let d = extractedDir { try? fm.removeItem(at: d) } }
+
+        let nutritionSource = extractedDir.map { $0.appendingPathComponent(nutritionBackupEntryName) }
+            .flatMap { existingFile($0) }
+        guard nutritionSource == nil || nutritionPath != nil else {
+            return .failure(String(localized: "The backup contains nutrition data, but no nutrition restore destination was provided."))
+        }
 
         // Validate: must be a real SQLite database (magic header "SQLite format 3\0").
         guard isSQLiteFile(at: source) else {
@@ -432,58 +478,71 @@ enum DataBackup {
             return .failure(String(localized: "This backup file is damaged and can't be restored (SQLite reports: \(complaint)). Your current data was left untouched. Try an earlier backup file."))
         }
 
+        if let nutritionSource {
+            guard isSQLiteFile(at: nutritionSource) else {
+                return .failure(String(localized: "The nutrition data in this backup isn't a SQLite database. Your current data was left untouched."))
+            }
+            let tables = sqliteTableNames(at: nutritionSource)
+            guard tables.contains("grdb_migrations"),
+                  tables.contains("nutritionFood"),
+                  tables.contains("nutritionLogEntry") else {
+                return .failure(String(localized: "The nutrition data in this backup isn't from NOOP. Your current data was left untouched."))
+            }
+            if let complaint = DatabaseIntegrity.quickCheckFailure(atPath: nutritionSource.path) {
+                return .failure(String(localized: "The nutrition data in this backup is damaged and can't be restored (SQLite reports: \(complaint)). Your current data was left untouched."))
+            }
+        }
+
         let dbURL = URL(fileURLWithPath: dbPath)
+        let nutritionDBURL = nutritionSource.flatMap { _ in
+            nutritionPath.map { URL(fileURLWithPath: $0) }
+        }
+        let hadDatabase = fm.fileExists(atPath: dbURL.path)
+        let hadNutritionDatabase = nutritionDBURL.map { fm.fileExists(atPath: $0.path) } ?? false
+        var sidecar = dbURL.deletingLastPathComponent()
+            .appendingPathComponent("whoop-replaced-\(timestamp()).sqlite")
+        let nutritionSidecar = nutritionDBURL?.deletingLastPathComponent()
+            .appendingPathComponent("nutrition-replaced-\(timestamp()).sqlite")
+
+        if let nutritionDBURL, hadNutritionDatabase,
+           let complaint = checkpointSQLiteWAL(at: nutritionDBURL) {
+            return .failure(String(localized: "Import couldn't safely preserve the current nutrition database (SQLite reports: \(complaint)). Your current data was left untouched."))
+        }
 
         do {
-            // Snapshot the current DB (+ sidecars) to a timestamped side file so the user can roll back.
-            var sidecar = dbURL.deletingLastPathComponent()
-                .appendingPathComponent("whoop-replaced-\(timestamp()).sqlite")
-            if fm.fileExists(atPath: dbURL.path) {
+            // Snapshot both current databases before replacing either one. Nutrition is optional so
+            // legacy backups continue to affect only the original store.
+            if hadDatabase {
                 if fm.fileExists(atPath: sidecar.path) { try fm.removeItem(at: sidecar) }
                 try fm.copyItem(at: dbURL, to: sidecar)
             } else {
                 // Nothing to preserve (fresh install); report a placeholder so the message reads sensibly.
                 sidecar = dbURL
             }
-
-            // Remove the live DB and its WAL/SHM siblings, then drop the backup in.
-            removeIfPresent(dbURL)
-            removeIfPresent(URL(fileURLWithPath: dbPath + "-wal"))
-            removeIfPresent(URL(fileURLWithPath: dbPath + "-shm"))
-
-            do {
-                try fm.copyItem(at: source, to: dbURL)
-            } catch {
-                // The live DB was just removed and the replacement didn't land. Roll back to the
-                // snapshot so a failed import leaves the user's data exactly as it was, instead of a
-                // fresh-empty DB on relaunch (mirrors the Android rollback). Clear any partial-copy
-                // leftover first — copyItem fails if the destination exists, which would otherwise
-                // block the restore.
-                if sidecar != dbURL, fm.fileExists(atPath: sidecar.path) {
-                    removeIfPresent(dbURL)
-                    try? fm.copyItem(at: sidecar, to: dbURL)
-                }
-                return .failure(String(localized: "Import failed. Your existing data was kept. \(error.localizedDescription)"))
+            if let nutritionDBURL, let nutritionSidecar, hadNutritionDatabase {
+                if fm.fileExists(atPath: nutritionSidecar.path) { try fm.removeItem(at: nutritionSidecar) }
+                try fm.copyItem(at: nutritionDBURL, to: nutritionSidecar)
             }
 
-            // #1014 defence-in-depth, post-swap: re-verify the file that actually LANDED at the
-            // live path with a second read-only quick_check. The staged file was verified above,
-            // but the copy itself can tear — disk-full mid-copy, a dying filesystem, the device
-            // sleeping — and the next launch would meet a corrupt store. Runs BEFORE any legacy
-            // sidecars are laid down: a bare main file is always read-only verifiable, and WAL
-            // frames carry their own checksums (SQLite validates them on the first real open), so
-            // the sidecars don't need this gate. On failure, roll back to the snapshot
-            // AUTOMATICALLY and say so; the snapshot file is kept either way (same policy as a
-            // successful import: the user can always reach the pre-import bytes).
-            if let complaint = DatabaseIntegrity.quickCheckFailure(atPath: dbURL.path) {
-                removeIfPresent(dbURL)
-                if sidecar != dbURL, fm.fileExists(atPath: sidecar.path) {
-                    try? fm.copyItem(at: sidecar, to: dbURL)
-                    return .failure(String(localized: "Import failed its post-restore integrity check (SQLite reports: \(complaint)). Your previous data was rolled back automatically and is unchanged."))
+            do {
+                replaceDatabase(at: dbURL, with: source)
+                if let complaint = DatabaseIntegrity.quickCheckFailure(atPath: dbURL.path) {
+                    throw RestoreSwapFailure(complaint: "the main database failed its post-restore integrity check (\(complaint))")
                 }
-                // Fresh install: there was no previous store to preserve, so removing the damaged
-                // file (done above) restores the exact pre-import state — an empty slate.
-                return .failure(String(localized: "Import failed its post-restore integrity check (SQLite reports: \(complaint)). The damaged file was removed; there was no previous data to roll back."))
+
+                if let nutritionSource, let nutritionDBURL {
+                    replaceDatabase(at: nutritionDBURL, with: nutritionSource)
+                    if let complaint = DatabaseIntegrity.quickCheckFailure(atPath: nutritionDBURL.path) {
+                        throw RestoreSwapFailure(complaint: "the nutrition database failed its post-restore integrity check (\(complaint))")
+                    }
+                }
+            } catch {
+                restoreSnapshot(sidecar, to: dbURL, hadOriginal: hadDatabase)
+                if let nutritionDBURL, let nutritionSidecar {
+                    restoreSnapshot(nutritionSidecar, to: nutritionDBURL,
+                                    hadOriginal: hadNutritionDatabase)
+                }
+                return .failure(String(localized: "Import failed. Your previous data was rolled back automatically. \(error.localizedDescription)"))
             }
 
             // Restore sidecars only for legacy plain-SQLite backups whose WAL wasn't
@@ -533,6 +592,7 @@ enum DataBackup {
     /// Canonical entry name for the SQLite inside a `.noopbak` ZIP. Matches the Android exporter so
     /// a backup produced on either platform restores on the other.
     private static let backupEntryName = "noop-backup.sqlite"
+    private static let nutritionBackupEntryName = "noop-nutrition.sqlite"
 
     private enum BackupArchiveError: LocalizedError {
         case entryTooLarge(String)
@@ -635,6 +695,8 @@ enum DataBackup {
             switch name {
             case backupEntryName:
                 limit = allowOversize ? Int64.max : maxBackupSQLiteBytes
+            case nutritionBackupEntryName:
+                limit = allowOversize ? Int64.max : maxBackupSQLiteBytes
             case BackupSettings.entryName:
                 limit = maxBackupSettingsBytes
             default:
@@ -672,6 +734,71 @@ enum DataBackup {
     private static func removeIfPresent(_ url: URL) {
         let fm = FileManager.default
         if fm.fileExists(atPath: url.path) { try? fm.removeItem(at: url) }
+    }
+
+    private static func existingFile(_ url: URL?) -> URL? {
+        guard let url, FileManager.default.fileExists(atPath: url.path) else { return nil }
+        return url
+    }
+
+    private static func backupDatabaseURLs(primary: URL, nutrition: URL?) -> [URL] {
+        var urls = [primary]
+        if let nutrition = existingFile(nutrition) { urls.append(nutrition) }
+        return urls
+    }
+
+    private static func checkpointNutritionDatabaseIfPresent(at url: URL?) async -> Bool {
+        guard let url = existingFile(url) else { return true }
+        do {
+            let database = try NutritionDatabase(path: url.path)
+            try await database.checkpointWAL()
+            return true
+        } catch {
+            return false
+        }
+    }
+
+    private static func checkpointSQLiteWAL(at url: URL) -> String? {
+        var db: OpaquePointer?
+        guard sqlite3_open_v2(url.path, &db, SQLITE_OPEN_READWRITE, nil) == SQLITE_OK else {
+            let message = db.map { String(cString: sqlite3_errmsg($0)) } ?? "could not open database"
+            sqlite3_close(db)
+            return message
+        }
+        defer { sqlite3_close(db) }
+        sqlite3_busy_timeout(db, 5_000)
+
+        var statement: OpaquePointer?
+        guard sqlite3_prepare_v2(db, "PRAGMA wal_checkpoint(TRUNCATE)", -1, &statement, nil) == SQLITE_OK else {
+            return String(cString: sqlite3_errmsg(db))
+        }
+        defer { sqlite3_finalize(statement) }
+        guard sqlite3_step(statement) == SQLITE_ROW else { return String(cString: sqlite3_errmsg(db)) }
+        return sqlite3_column_int(statement, 0) == 0 ? nil : "database is busy"
+    }
+
+    private static func replaceDatabase(at destination: URL, with source: URL) throws {
+        let fm = FileManager.default
+        for url in [
+            destination,
+            URL(fileURLWithPath: destination.path + "-wal"),
+            URL(fileURLWithPath: destination.path + "-shm"),
+        ] where fm.fileExists(atPath: url.path) {
+            try fm.removeItem(at: url)
+        }
+        try fm.copyItem(at: source, to: destination)
+    }
+
+    private static func restoreSnapshot(_ snapshot: URL, to destination: URL, hadOriginal: Bool) {
+        removeIfPresent(destination)
+        removeIfPresent(URL(fileURLWithPath: destination.path + "-wal"))
+        removeIfPresent(URL(fileURLWithPath: destination.path + "-shm"))
+        if hadOriginal { try? FileManager.default.copyItem(at: snapshot, to: destination) }
+    }
+
+    private struct RestoreSwapFailure: LocalizedError {
+        let complaint: String
+        var errorDescription: String? { complaint }
     }
 
     /// Copy a legacy backup's `<source><suffix>` sidecar next to the live DB if it exists, so an

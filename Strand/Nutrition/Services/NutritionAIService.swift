@@ -22,7 +22,11 @@ enum NutritionAIKeyStore {
             return true
         }
         guard let data = trimmed.data(using: .utf8) else { return false }
-        SecItemDelete(query as CFDictionary)
+        let update = [kSecValueData as String: data]
+        let updateStatus = SecItemUpdate(query as CFDictionary, update as CFDictionary)
+        if updateStatus == errSecSuccess { return true }
+        guard updateStatus == errSecItemNotFound else { return false }
+
         var attributes = query
         attributes[kSecValueData as String] = data
         attributes[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly

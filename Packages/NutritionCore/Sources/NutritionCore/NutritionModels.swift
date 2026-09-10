@@ -1,5 +1,11 @@
 import Foundation
 
+public enum NutritionLimits {
+    public static let maximumGrams = 1_000_000.0
+    public static let maximumNutrientValue = 1_000_000.0
+    public static let maximumServingAmount = 100_000.0
+}
+
 public enum NutritionMeal: String, CaseIterable, Codable, Identifiable, Sendable {
     case breakfast
     case lunch
@@ -50,7 +56,9 @@ public struct NutritionMacros: Codable, Equatable, Sendable {
     }
 
     public var isValid: Bool {
-        [calories, protein, carbohydrates, fat].allSatisfy { $0.isFinite && $0 >= 0 }
+        [calories, protein, carbohydrates, fat].allSatisfy {
+            $0.isFinite && $0 >= 0 && $0 <= NutritionLimits.maximumNutrientValue
+        }
     }
 
     public func scaled(by factor: Double) -> NutritionMacros {
@@ -93,7 +101,8 @@ public struct NutritionServing: Codable, Equatable, Sendable {
 
     public var isValid: Bool {
         amount.isFinite && amount > 0
-            && grams.isFinite && grams > 0
+            && amount <= NutritionLimits.maximumServingAmount
+            && grams.isFinite && grams > 0 && grams <= NutritionLimits.maximumGrams
             && !unitSingular.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             && !unitPlural.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
@@ -242,11 +251,16 @@ public struct NutritionPlateItem: Identifiable, Codable, Equatable, Sendable {
     }
 
     public var isValid: Bool {
-        let baseQuantityIsValid = baseQuantityGrams.map { $0.isFinite && $0 > 0 } ?? true
-        let quantityIsValid = quantityGrams.map { $0.isFinite && $0 > 0 } ?? true
+        let baseQuantityIsValid = baseQuantityGrams.map {
+            $0.isFinite && $0 > 0 && $0 <= NutritionLimits.maximumGrams
+        } ?? true
+        let quantityIsValid = quantityGrams.map {
+            $0.isFinite && $0 > 0 && $0 <= NutritionLimits.maximumGrams
+        } ?? true
         return !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             && name.count <= 200
             && baseMacros.isValid
+            && macros.isValid
             && baseQuantityIsValid
             && quantityIsValid
     }
@@ -275,7 +289,8 @@ public struct NutritionPlateItem: Identifiable, Codable, Equatable, Sendable {
     }
 
     private static func formatted(_ value: Double) -> String {
-        if abs(value.rounded() - value) < 0.0001 { return String(Int(value.rounded())) }
+        guard value.isFinite else { return "0" }
+        if abs(value.rounded() - value) < 0.0001 { return String(format: "%.0f", value) }
         return String(format: "%.1f", value)
     }
 }

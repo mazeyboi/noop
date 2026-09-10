@@ -107,6 +107,27 @@ final class NutritionDatabaseTests: XCTestCase {
         XCTAssertTrue(emptyDay.entries.isEmpty)
     }
 
+    func testConcurrentFirstOpenIsSerialized() async throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let path = directory.appendingPathComponent("nutrition.sqlite").path
+
+        let stores = try await withThrowingTaskGroup(of: NutritionDatabase.self) { group in
+            for _ in 0..<6 {
+                group.addTask { try NutritionDatabase(path: path) }
+            }
+            var result: [NutritionDatabase] = []
+            for try await store in group { result.append(store) }
+            return result
+        }
+
+        XCTAssertEqual(stores.count, 6)
+        let tables = try await stores[0].tableNamesForTesting()
+        XCTAssertTrue(tables.contains("nutritionFood"))
+    }
+
     func testEditDuplicateDeleteAndRestoreLoggedEntry() async throws {
         let database = try NutritionDatabase.inMemory()
         let food = NutritionFood(

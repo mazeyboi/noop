@@ -1,3 +1,4 @@
+import Combine
 import SwiftUI
 import NutritionCore
 import StrandDesign
@@ -43,13 +44,10 @@ struct NutritionView: View {
         .task(id: localDate) { await controller.reload(localDate: localDate) }
         .onChange(of: scenePhase) { phase in
             guard phase == .active else { return }
-            let today = NutritionLocalDate.key(for: Date())
-            if today == localDate {
-                Task { await controller.reload(localDate: localDate) }
-            } else {
-                localDate = today
-            }
+            refreshLocalDate()
         }
+        .onReceive(NotificationCenter.default.publisher(for: .NSCalendarDayChanged)) { _ in refreshLocalDate() }
+        .onReceive(NotificationCenter.default.publisher(for: .NSSystemTimeZoneDidChange)) { _ in refreshLocalDate() }
         .sheet(isPresented: $showingLogger) {
             NutritionLoggerView(controller: controller, localDate: localDate, initialMeal: loggerMeal)
         }
@@ -258,6 +256,15 @@ struct NutritionView: View {
         case 11..<16: return .lunch
         case 16..<22: return .dinner
         default: return .snacks
+        }
+    }
+
+    private func refreshLocalDate() {
+        let today = NutritionLocalDate.key(for: Date())
+        if today == localDate {
+            Task { await controller.reload(localDate: localDate) }
+        } else {
+            localDate = today
         }
     }
 }

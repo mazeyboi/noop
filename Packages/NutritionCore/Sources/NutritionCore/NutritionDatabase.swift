@@ -1,6 +1,10 @@
 import Foundation
 import GRDB
 
+private enum NutritionDatabaseOpenGate {
+    static let lock = NSLock()
+}
+
 public enum NutritionDatabaseError: Error, Equatable {
     case invalidFood
     case invalidEntry
@@ -20,6 +24,8 @@ public actor NutritionDatabase {
             try db.execute(sql: "PRAGMA foreign_keys = ON")
             try db.execute(sql: "PRAGMA synchronous = NORMAL")
         }
+        NutritionDatabaseOpenGate.lock.lock()
+        defer { NutritionDatabaseOpenGate.lock.unlock() }
         let pool = try DatabasePool(path: path, configuration: configuration)
         try Self.migrator.migrate(pool)
         dbWriter = pool
@@ -32,6 +38,12 @@ public actor NutritionDatabase {
 
     public static func inMemory() throws -> NutritionDatabase {
         try NutritionDatabase(dbWriter: DatabaseQueue())
+    }
+
+    public func checkpointWAL() throws {
+        try dbWriter.writeWithoutTransaction { db in
+            try db.execute(sql: "PRAGMA wal_checkpoint(TRUNCATE)")
+        }
     }
 
     func tableNamesForTesting() throws -> Set<String> {
@@ -376,7 +388,9 @@ private func insertEntry(_ entry: NutritionLogEntry, db: Database) throws {
 }
 
 private func entryIsValid(_ entry: NutritionLogEntry) -> Bool {
-    let quantityIsValid = entry.quantityGrams.map { $0.isFinite && $0 > 0 } ?? true
+    let quantityIsValid = entry.quantityGrams.map {
+        $0.isFinite && $0 > 0 && $0 <= NutritionLimits.maximumGrams
+    } ?? true
     return NutritionLocalDate.isValid(entry.localDate)
         && !entry.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         && entry.name.count <= 200

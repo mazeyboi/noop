@@ -55,6 +55,14 @@ final class NutritionParsingTests: XCTestCase {
         }
     }
 
+    func testOpenFoodFactsDoesNotTreatMillilitresAsGrams() throws {
+        let data = Data(#"{"status":1,"product":{"product_name":"Drink","serving_size":"250 ml","serving_quantity":250,"serving_quantity_unit":"ml","nutriments":{"energy-kcal_100g":40,"proteins_100g":0,"carbohydrates_100g":10,"fat_100g":0}}}"#.utf8)
+
+        let food = try OpenFoodFactsNormalizer.food(from: data, barcode: "12345678")
+
+        XCTAssertNil(food.serving)
+    }
+
     func testServingParserUsesMetadataRatherThanFoodName() {
         XCTAssertEqual(
             NutritionServingParser.parse("2 slices (56 g)"),

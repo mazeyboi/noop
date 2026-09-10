@@ -12,12 +12,15 @@ struct NutritionQuickAddView: View {
     @State private var fat = ""
 
     private var macros: NutritionMacros? {
-        guard let calories = positiveNumber(calories) else { return nil }
+        guard let calories = positiveNumber(calories),
+              let protein = numberOrZero(protein),
+              let carbohydrates = numberOrZero(carbohydrates),
+              let fat = numberOrZero(fat) else { return nil }
         let result = NutritionMacros(
             calories: calories,
-            protein: optionalNumber(protein) ?? 0,
-            carbohydrates: optionalNumber(carbohydrates) ?? 0,
-            fat: optionalNumber(fat) ?? 0
+            protein: protein,
+            carbohydrates: carbohydrates,
+            fat: fat
         )
         return result.isValid ? result : nil
     }
@@ -59,7 +62,7 @@ struct NutritionQuickAddView: View {
 
 struct NutritionCustomFoodSheet: View {
     let existing: NutritionFood?
-    let onSave: (NutritionFood) -> Void
+    let onSave: (NutritionFood) async -> Bool
 
     @Environment(\.dismiss) private var dismiss
     @State private var name: String
@@ -72,8 +75,10 @@ struct NutritionCustomFoodSheet: View {
     @State private var unitSingular: String
     @State private var unitPlural: String
     @State private var barcode: String
+    @State private var isSaving = false
+    @State private var saveFailed = false
 
-    init(existing: NutritionFood? = nil, onSave: @escaping (NutritionFood) -> Void) {
+    init(existing: NutritionFood? = nil, onSave: @escaping (NutritionFood) async -> Bool) {
         self.existing = existing
         self.onSave = onSave
         let grams = existing?.serving?.grams ?? 100
@@ -94,12 +99,15 @@ struct NutritionCustomFoodSheet: View {
         let trimmedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmedName.isEmpty,
               let grams = positiveNumber(servingGrams),
-              let calories = nonnegativeNumber(calories) else { return nil }
+              let calories = nonnegativeNumber(calories),
+              let protein = numberOrZero(protein),
+              let carbohydrates = numberOrZero(carbohydrates),
+              let fat = numberOrZero(fat) else { return nil }
         let servingMacros = NutritionMacros(
             calories: calories,
-            protein: optionalNumber(protein) ?? 0,
-            carbohydrates: optionalNumber(carbohydrates) ?? 0,
-            fat: optionalNumber(fat) ?? 0
+            protein: protein,
+            carbohydrates: carbohydrates,
+            fat: fat
         )
         guard servingMacros.isValid else { return nil }
         let singular = unitSingular.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -147,6 +155,11 @@ struct NutritionCustomFoodSheet: View {
                         NutritionTextField(title: "Plural", text: $unitPlural)
                     }
                     NutritionTextField(title: "Barcode (optional)", text: $barcode)
+                    if saveFailed {
+                        Text("The food could not be saved. Check for a duplicate barcode and try again.")
+                            .font(StrandFont.footnote)
+                            .foregroundStyle(StrandPalette.recovery000)
+                    }
                 }
                 .padding(NoopMetrics.space5)
             }
@@ -160,12 +173,19 @@ struct NutritionCustomFoodSheet: View {
                     Button("Cancel") { dismiss() }
                 }
                 ToolbarItem(placement: .confirmationAction) {
-                    Button("Save") {
+                    Button(isSaving ? "Saving..." : "Save") {
                         guard let food else { return }
-                        onSave(food)
-                        dismiss()
+                        isSaving = true
+                        saveFailed = false
+                        Task {
+                            let saved = await onSave(food)
+                            await MainActor.run {
+                                isSaving = false
+                                if saved { dismiss() } else { saveFailed = true }
+                            }
+                        }
                     }
-                    .disabled(food == nil)
+                    .disabled(food == nil || isSaving)
                 }
             }
         }
@@ -207,12 +227,15 @@ struct NutritionPlateItemEditor: View {
     private var editedItem: NutritionPlateItem? {
         let trimmedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmedName.isEmpty,
-              let calories = nonnegativeNumber(calories) else { return nil }
+              let calories = nonnegativeNumber(calories),
+              let protein = numberOrZero(protein),
+              let carbohydrates = numberOrZero(carbohydrates),
+              let fat = numberOrZero(fat) else { return nil }
         let macros = NutritionMacros(
             calories: calories,
-            protein: optionalNumber(protein) ?? 0,
-            carbohydrates: optionalNumber(carbohydrates) ?? 0,
-            fat: optionalNumber(fat) ?? 0
+            protein: protein,
+            carbohydrates: carbohydrates,
+            fat: fat
         )
         guard macros.isValid else { return nil }
         var copy = item
@@ -325,12 +348,15 @@ struct NutritionLogEntryEditor: View {
     }
 
     private var editedEntry: NutritionLogEntry? {
-        guard let calories = nonnegativeNumber(calories) else { return nil }
+        guard let calories = nonnegativeNumber(calories),
+              let protein = numberOrZero(protein),
+              let carbohydrates = numberOrZero(carbohydrates),
+              let fat = numberOrZero(fat) else { return nil }
         let macros = NutritionMacros(
             calories: calories,
-            protein: optionalNumber(protein) ?? 0,
-            carbohydrates: optionalNumber(carbohydrates) ?? 0,
-            fat: optionalNumber(fat) ?? 0
+            protein: protein,
+            carbohydrates: carbohydrates,
+            fat: fat
         )
         guard macros.isValid else { return nil }
         var copy = entry
@@ -460,7 +486,8 @@ struct NutritionNumberField: View {
 func nonnegativeNumber(_ value: String) -> Double? {
     guard let number = Double(value.replacingOccurrences(of: ",", with: ".")),
           number.isFinite,
-          number >= 0 else { return nil }
+          number >= 0,
+          number <= NutritionLimits.maximumNutrientValue else { return nil }
     return number
 }
 
@@ -469,8 +496,8 @@ func positiveNumber(_ value: String) -> Double? {
     return number
 }
 
-func optionalNumber(_ value: String) -> Double? {
-    value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : nonnegativeNumber(value)
+func numberOrZero(_ value: String) -> Double? {
+    value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? 0 : nonnegativeNumber(value)
 }
 
 func normalized(_ value: String) -> String? {
@@ -479,7 +506,12 @@ func normalized(_ value: String) -> String? {
 }
 
 func decimal(_ value: Double) -> String {
-    abs(value.rounded() - value) < 0.0001 ? String(Int(value.rounded())) : String(format: "%.1f", value)
+    guard value.isFinite else { return "0" }
+    return abs(value.rounded() - value) < 0.0001
+        ? String(format: "%.0f", value)
+        : String(format: "%.1f", value)
 }
 
-func whole(_ value: Double) -> String { String(Int(value.rounded())) }
+func whole(_ value: Double) -> String {
+    value.isFinite ? String(format: "%.0f", value) : "0"
+}

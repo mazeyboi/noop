@@ -54,6 +54,7 @@ jobs:
           - StrandAnalytics
           - StrandImport
           - StrandDesign
+          - NutritionCore
           - NoopLocalAccess
     steps:
       - name: Checkout

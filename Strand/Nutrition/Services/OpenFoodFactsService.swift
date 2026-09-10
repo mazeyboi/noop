@@ -38,7 +38,7 @@ struct OpenFoodFactsService {
         components.queryItems = [
             URLQueryItem(
                 name: "fields",
-                value: "product_name,brands,serving_size,serving_quantity,nutriments"
+                value: "product_name,brands,serving_size,serving_quantity,serving_quantity_unit,nutriments"
             )
         ]
         guard let url = components.url else { throw BarcodeLookupError.invalidBarcode }

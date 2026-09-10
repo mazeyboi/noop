@@ -48,6 +48,7 @@ public enum GeminiNutritionParser {
                   let grams = row.grams,
                   grams.isFinite,
                   grams > 0,
+                  grams <= NutritionLimits.maximumGrams,
                   let calories = row.calories,
                   let protein = row.protein,
                   let carbohydrates = row.carbohydrates,
@@ -113,9 +114,13 @@ public enum OpenFoodFactsNormalizer {
 
         let servingText = product["serving_size"] as? String
         let servingQuantity = number(product["serving_quantity"])
+        let servingUnit = (product["serving_quantity_unit"] as? String)?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
         let serving = servingText.flatMap(NutritionServingParser.parse)
             ?? servingQuantity.flatMap { value in
-                value > 0 ? NutritionServing(
+                guard servingUnit == "g" || servingUnit == "gram" || servingUnit == "grams" else { return nil }
+                return value > 0 ? NutritionServing(
                     amount: 1,
                     unitSingular: "serving",
                     unitPlural: "servings",
@@ -135,7 +140,11 @@ public enum OpenFoodFactsNormalizer {
     }
 
     private static func requiredNutritionNumber(_ key: String, in values: [String: Any]) throws -> Double {
-        guard values[key] != nil, let value = number(values[key]), value.isFinite, value >= 0 else {
+        guard values[key] != nil,
+              let value = number(values[key]),
+              value.isFinite,
+              value >= 0,
+              value <= NutritionLimits.maximumNutrientValue else {
             throw OpenFoodFactsError.malformedNutrition
         }
         return value
