@@ -56,6 +56,8 @@ packages:
     path: Packages/StrandImport
   StrandDesign:
     path: Packages/StrandDesign
+  NutritionCore:
+    path: Packages/NutritionCore
   # Clean-room local Oura ring BLE protocol (framing, auth, decoders, driver). Pure value types,
   # zero CoreBluetooth, so it stays headless/JVM-testable; the app target imports it for OuraLiveSource.
   OuraProtocol:
@@ -151,6 +153,7 @@ targets:
       - package: StrandAnalytics
       - package: StrandImport
       - package: StrandDesign
+      - package: NutritionCore
       - package: MarkdownUI
       - package: ZIPFoundation
       - package: OuraProtocol
@@ -185,6 +188,7 @@ targets:
       - target: Strand
       - package: WhoopProtocol
       - package: WhoopStore
+      - package: NutritionCore
       - package: OuraProtocol
     settings:
       base:
@@ -297,6 +301,7 @@ targets:
         NSHealthShareUsageDescription: "NOOP reads your own Apple Health data on-device to compute recovery, strain, and sleep. Nothing leaves your device."
         NSHealthUpdateUsageDescription: "NOOP writes the metrics it computes from your strap back into Apple Health, on-device and only when you allow it."
         NSMotionUsageDescription: "NOOP reads your iPhone's step count for a walking or running workout to show steps in the activity summary. It stays on your device. Nothing leaves it."
+        NSCameraUsageDescription: "NOOP uses the camera only when you choose to photograph food or scan a barcode. Photos are sent to Gemini only after you add your own API key and tap Analyze."
         # K4: Coach voice input. Speech is transcribed ON-DEVICE ONLY (requiresOnDeviceRecognition);
         # the mic button is disabled where the locale doesn't support that, never falls back to
         # server transcription. Only the resulting TEXT reaches the provider, via the same channel
@@ -349,6 +354,7 @@ targets:
       - package: StrandAnalytics
       - package: StrandImport
       - package: StrandDesign
+      - package: NutritionCore
       - package: MarkdownUI
       - package: ZIPFoundation
       - package: PolarProtocol
