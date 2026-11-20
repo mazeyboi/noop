@@ -1,0 +1,150 @@
+# Daily: pick up a new upstream NOOP release and ship it with the fork's extras.
+#
+#   merge    find ryanbr/noop's latest release tag; if main doesn't have it yet, merge it
+#            (.github/fork/scripts/merge-upstream.sh) and push the result to sync/<tag>.
+#            If main already has it but main itself was never released (a failed publish, or new
+#            fork work), build main instead.
+#   build    build-release.yml: every package's tests + the iOS IPA; then fast-forward main
+#            and publish v<version>-extras.<N>. Nothing is published unless all of it passes.
+#   report   on any failure (merge conflict, test, build, publish): open an issue on THIS fork,
+#            or comment on the open one for the same tag.
+#
+# Read-only towards upstream: it fetches from ryanbr/noop and never pushes, comments or opens
+# anything there.
+name: Sync upstream
+
+on:
+  schedule:
+    - cron: '23 5 * * *'
+  workflow_dispatch:
+    inputs:
+      upstream_ref:
+        description: Upstream tag or branch to merge (blank = latest upstream release)
+        required: false
+        default: ''
+      publish:
+        description: Publish a release if everything passes (off = dry run, nothing is pushed to main)
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: sync-upstream
+  cancel-in-progress: false
+
+jobs:
+  merge:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      actions: write
+    outputs:
+      ref: ${{ steps.ref.outputs.ref }}
+      build: ${{ steps.merge.outputs.build }}
+      sha: ${{ steps.merge.outputs.sha }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: main
+          fetch-depth: 0
+      - name: Keep the schedule alive
+        # GitHub turns off schedules in public repos after 60 days without activity; upstream may
+        # go quiet that long. Re-enabling through the API resets that clock. Best effort.
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh api -X PUT "repos/$GITHUB_REPOSITORY/actions/workflows/sync-upstream.yml/enable" || true
+      - id: ref
+        env:
+          GH_TOKEN: ${{ github.token }}
+          INPUT_REF: ${{ inputs.upstream_ref }}
+        run: |
+          set -euo pipefail
+          ref="${INPUT_REF:-}"
+          if [ -z "$ref" ]; then
+            ref=$(gh release view --repo ryanbr/noop --json tagName --jq .tagName)
+          fi
+          [[ "$ref" =~ ^[A-Za-z0-9._/-]+$ ]] || { echo "::error::bad upstream ref '$ref'"; exit 1; }
+          echo "ref=$ref" >> "$GITHUB_OUTPUT"
+          echo "Upstream ref: $ref"
+      - id: merge
+        env:
+          REF: ${{ steps.ref.outputs.ref }}
+        run: |
+          set -uo pipefail
+          git config user.name 'noop-fork-sync'
+          git config user.email 'noop-fork-sync@users.noreply.github.com'
+          up=https://github.com/ryanbr/noop.git
+          if git fetch --quiet --no-tags "$up" "+refs/tags/$REF:refs/tags/$REF" 2>/dev/null; then
+            target="refs/tags/$REF"
+          else
+            git fetch --quiet --no-tags "$up" "+refs/heads/$REF:refs/remotes/upstream/$REF"
+            target="refs/remotes/upstream/$REF"
+          fi
+          out=$(bash .github/fork/scripts/merge-upstream.sh "$target"); rc=$?
+          case $rc in
+            0)
+              git push --force origin "HEAD:refs/heads/sync/$REF" || exit 1
+              echo "Merged $REF into main as $(git rev-parse --short HEAD) (on sync/$REF)" >> "$GITHUB_STEP_SUMMARY"
+              { echo "build=true"; echo "sha=$(git rev-parse HEAD)"; } >> "$GITHUB_OUTPUT" ;;
+            3)
+              head=$(git rev-parse HEAD)
+              if git ls-remote --tags origin | grep -E "^$head\s+refs/tags/v[0-9.]+-extras\.[0-9]+" >/dev/null; then
+                echo "main already has $REF and is released. Nothing to do." >> "$GITHUB_STEP_SUMMARY"
+                echo "build=false" >> "$GITHUB_OUTPUT"
+              else
+                echo "main already has $REF but main itself isn't released yet: building it." >> "$GITHUB_STEP_SUMMARY"
+                { echo "build=true"; echo "sha=$head"; } >> "$GITHUB_OUTPUT"
+              fi ;;
+            2)
+              {
+                echo "### Merge conflict merging upstream $REF"
+                echo
+                echo "Conflicted files (fix by hand: merge locally, resolve, push to main):"
+                echo
+                printf -- '- `%s`\n' $out
+              } >> "$GITHUB_STEP_SUMMARY"
+              echo "::error::merge conflict with upstream $REF: $(echo $out)"
+              exit 1 ;;
+            *)
+              echo "::error::merge-upstream.sh failed ($rc)"; exit 1 ;;
+          esac
+
+  build:
+    needs: merge
+    if: needs.merge.outputs.build == 'true'
+    permissions:
+      contents: write
+    uses: ./.github/workflows/build-release.yml
+    with:
+      ref: ${{ needs.merge.outputs.sha }}
+      publish: ${{ github.event_name == 'schedule' || inputs.publish }}
+      promote_to_main: true
+
+  report:
+    needs: [merge, build]
+    if: failure()
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+    steps:
+      - env:
+          GH_TOKEN: ${{ github.token }}
+          REF: ${{ needs.merge.outputs.ref }}
+          RUN: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          title="Upstream sync failed: ${REF:-unknown ref}"
+          body="The daily upstream sync failed, so nothing was published and the phone keeps the last good build.
+
+          Run: $RUN
+
+          Open the run, look at the first red step. A merge conflict lists the files to fix by hand."
+          num=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "\"$title\" in:title" \
+                  --json number,title --jq "map(select(.title == \"$title\")) | .[0].number // empty")
+          if [ -n "$num" ]; then
+            gh issue comment "$num" --repo "$GITHUB_REPOSITORY" --body "Failed again: $RUN"
+          else
+            gh issue create --repo "$GITHUB_REPOSITORY" --title "$title" --body "$body"
+          fi
