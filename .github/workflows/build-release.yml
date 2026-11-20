@@ -1,0 +1,180 @@
+# Build and (optionally) release the fork's iOS IPA.
+#
+# Called by sync-upstream.yml after merging an upstream release, and runnable by hand
+# (Actions -> Build and release -> Run workflow). Steps:
+#   discover  resolve the commit, list Swift packages, read MARKETING_VERSION
+#   test      `swift test` for every package (upstream's + Packages/NOOPExtras)
+#   ios       upstream's iOS build recipe (fork-release.yml, iOS leg) -> unsigned IPA artifact
+#   publish   (only when asked) fast-forward main if asked, then release v<version>-extras.<N>
+# Nothing is published unless every test and the build pass.
+name: Build and release
+
+on:
+  workflow_call:
+    inputs:
+      ref:
+        description: Commit or branch to build
+        type: string
+        required: true
+      publish:
+        type: boolean
+        default: false
+      promote_to_main:
+        description: Fast-forward main to this commit before publishing
+        type: boolean
+        default: false
+    outputs:
+      tag:
+        description: The release tag, if one was published
+        value: ${{ jobs.publish.outputs.tag }}
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: Publish a release (only accepted when building the current main)
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  discover:
+    runs-on: ubuntu-latest
+    outputs:
+      sha: ${{ steps.d.outputs.sha }}
+      base: ${{ steps.d.outputs.base }}
+      packages: ${{ steps.d.outputs.packages }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ inputs.ref || github.sha }}
+      - id: d
+        run: |
+          set -euo pipefail
+          base=$(grep -m1 'MARKETING_VERSION:' project.yml | sed -E 's/.*"([^"]+)".*/\1/')
+          [[ "$base" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "::error::bad MARKETING_VERSION '$base'"; exit 1; }
+          {
+            echo "sha=$(git rev-parse HEAD)"
+            echo "base=$base"
+            echo "packages=$(bash .github/fork/scripts/list-packages.sh)"
+          } >> "$GITHUB_OUTPUT"
+          echo "Building $(git rev-parse --short HEAD), NOOP $base"
+
+  test:
+    needs: discover
+    runs-on: macos-15
+    timeout-minutes: 45
+    strategy:
+      fail-fast: true
+      matrix:
+        package: ${{ fromJSON(needs.discover.outputs.packages) }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ needs.discover.outputs.sha }}
+      - name: Test ${{ matrix.package }}
+        run: swift test
+        working-directory: Packages/${{ matrix.package }}
+
+  ios:
+    needs: discover
+    # iOS 26 Liquid Glass (glassEffect) needs the iOS 26 SDK -> Xcode 26 -> macos-26 (as upstream).
+    runs-on: macos-26
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ needs.discover.outputs.sha }}
+      - name: Install XcodeGen
+        run: brew install xcodegen
+      - name: Generate Xcode project
+        run: xcodegen generate
+      - name: Build NOOPiOS for device (unsigned, Release)
+        run: >-
+          xcodebuild -scheme NOOPiOS -configuration Release -destination 'generic/platform=iOS'
+          -derivedDataPath build/dd
+          CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY=""
+          build
+      - name: Package sideload IPA
+        run: |
+          set -euo pipefail
+          APP=$(find build/dd/Build/Products/Release-iphoneos -maxdepth 1 -name '*.app' -type d | head -1)
+          test -n "$APP" || { echo "::error::.app (iphoneos) not found"; exit 1; }
+          bash .github/fork/scripts/package-ipa.sh "$APP" build out
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ipa
+          path: out/
+          if-no-files-found: error
+          retention-days: 14
+
+  publish:
+    if: inputs.publish
+    needs: [discover, test, ios]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    concurrency:
+      group: release-publish
+      cancel-in-progress: false
+    outputs:
+      tag: ${{ steps.release.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ needs.discover.outputs.sha }}
+          fetch-depth: 0
+      - uses: actions/download-artifact@v4
+        with:
+          name: ipa
+          path: out
+      - name: Check the artifact
+        run: cd out && sha256sum -c NOOP-ios-extras-build.ipa.sha256
+      - name: Fast-forward main
+        if: inputs.promote_to_main
+        env:
+          SHA: ${{ needs.discover.outputs.sha }}
+        # Not forced: refuses (and publishes nothing) if main moved since the merge.
+        run: git push origin "$SHA:refs/heads/main"
+      - name: Require the current main
+        env:
+          SHA: ${{ needs.discover.outputs.sha }}
+        run: |
+          main=$(git ls-remote origin refs/heads/main | cut -f1)
+          [ "$main" = "$SHA" ] || { echo "::error::only the current main ($main) can be released, not $SHA"; exit 1; }
+      - id: release
+        name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SHA: ${{ needs.discover.outputs.sha }}
+          BASE: ${{ needs.discover.outputs.base }}
+        run: |
+          set -euo pipefail
+          TAG=$({ git ls-remote --tags origin | sed -E 's#.*refs/tags/##; s#\^\{\}$##'
+                  gh release list --repo "$GITHUB_REPOSITORY" --limit 200 --json tagName --jq '.[].tagName'
+                } | bash .github/fork/scripts/next-extras-tag.sh "$BASE")
+          NAME="NOOP-ios-extras-${TAG}.ipa"
+          mv out/NOOP-ios-extras-build.ipa "out/$NAME"
+          (cd out && sha256sum "$NAME" > "$NAME.sha256")
+          HEX=$(cut -d' ' -f1 "out/$NAME.sha256")
+          # Read-only fetch of the upstream base tag, to list the fork's own commits on top of it.
+          git fetch --quiet --no-tags https://github.com/ryanbr/noop.git "refs/tags/v${BASE}:refs/tags/v${BASE}" || true
+          {
+            echo "NOOP **${BASE}** (upstream [v${BASE}](https://github.com/ryanbr/noop/releases/tag/v${BASE})) plus this fork's extras."
+            echo
+            echo "- IPA: \`${NAME}\` (unsigned, bundle ID \`com.noopapp.noop\`, includes NOOPWidgets)"
+            echo "- sha256: \`${HEX}\`"
+            echo "- Commit: ${SHA}"
+            echo
+            echo "Fork commits since upstream v${BASE}:"
+            echo
+            if git rev-parse -q --verify "refs/tags/v${BASE}" >/dev/null; then
+              git log --no-merges --format='- %s' "v${BASE}..${SHA}" | head -50
+            else
+              echo "- (upstream tag not found)"
+            fi
+          } > notes.md
+          gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --target "$SHA" --latest \
+            --title "NOOP ${TAG}" --notes-file notes.md "out/$NAME" "out/$NAME.sha256"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "Published $TAG" >> "$GITHUB_STEP_SUMMARY"
