@@ -1,0 +1,47 @@
+# Fork CI (mazeyboi/noop). The fork owns .github/workflows and .github/fork; upstream's own
+# workflows are not used here (see FORK.md). This runs on every push and PR:
+#   - the fork's script tests and actionlint (cheap, Linux)
+#   - every Swift package's tests, discovered from Packages/*, so new upstream packages and
+#     Packages/NOOPExtras are covered without editing this file.
+name: Fork CI
+
+on:
+  push:
+    branches: [main, 'fork/**', 'extras/**']
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: fork-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  scripts:
+    runs-on: ubuntu-latest
+    outputs:
+      packages: ${{ steps.discover.outputs.packages }}
+    steps:
+      - uses: actions/checkout@v5
+      - name: Script tests
+        run: bash .github/fork/tests/run-all.sh
+      - name: actionlint
+        run: docker run --rm -v "$PWD:/repo" -w /repo rhysd/actionlint:1.7.7 -color
+      - id: discover
+        run: echo "packages=$(bash .github/fork/scripts/list-packages.sh)" >> "$GITHUB_OUTPUT"
+
+  packages:
+    needs: scripts
+    runs-on: macos-15
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        package: ${{ fromJSON(needs.scripts.outputs.packages) }}
+    steps:
+      - uses: actions/checkout@v5
+      - name: Test ${{ matrix.package }}
+        run: swift test
+        working-directory: Packages/${{ matrix.package }}
