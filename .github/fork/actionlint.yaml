@@ -1,0 +1,4 @@
+# actionlint 1.7.7 predates the macos-26 runner label upstream's iOS build needs.
+self-hosted-runner:
+  labels:
+    - macos-26
