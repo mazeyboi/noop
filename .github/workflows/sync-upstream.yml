@@ -103,9 +103,9 @@ jobs:
                 echo
                 echo "Conflicted files (fix by hand: merge locally, resolve, push to main):"
                 echo
-                printf -- '- `%s`\n' $out
+                while IFS= read -r f; do echo "- $f"; done <<< "$out"
               } >> "$GITHUB_STEP_SUMMARY"
-              echo "::error::merge conflict with upstream $REF: $(echo $out)"
+              echo "::error::merge conflict with upstream $REF: $(tr '\n' ' ' <<< "$out")"
               exit 1 ;;
             *)
               echo "::error::merge-upstream.sh failed ($rc)"; exit 1 ;;

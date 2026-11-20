@@ -28,7 +28,7 @@ jobs:
       - name: Script tests
         run: bash .github/fork/tests/run-all.sh
       - name: actionlint
-        run: docker run --rm -v "$PWD:/repo" -w /repo rhysd/actionlint:1.7.7 -color
+        run: docker run --rm -v "$PWD:/repo" -w /repo rhysd/actionlint:1.7.7 -color -config-file .github/fork/actionlint.yaml
       - id: discover
         run: echo "packages=$(bash .github/fork/scripts/list-packages.sh)" >> "$GITHUB_OUTPUT"
 
