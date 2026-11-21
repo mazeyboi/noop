@@ -108,6 +108,28 @@ final class NOOPDataReaderTests: XCTestCase {
         XCTAssertNotEqual(try r.hrFingerprint(deviceId: "whoop-1", from: start, to: end), fp)
     }
 
+    func test_reads_journal_from_upstream_schema() async throws {
+        try await makeFixture("""
+        INSERT INTO journal (deviceId, day, question, answeredYes, notes, numericValue) VALUES
+          ('whoop-1', '2026-11-20', 'Alcohol', 1, 'two beers', 2),
+          ('whoop-1', '2026-11-20', 'Late meal', 0, NULL, NULL);
+        """)
+        let recs = try XCTUnwrap(reader().records(kind: .noop_journal)).sorted { $0.id < $1.id }
+        XCTAssertEqual(recs.map(\.id), ["whoop-1|2026-11-20|Alcohol", "whoop-1|2026-11-20|Late meal"])
+        XCTAssertEqual(recs[0].data["day"], .string("2026-11-20"))
+        XCTAssertEqual(recs[0].data["question"], .string("Alcohol"))
+        XCTAssertEqual(recs[0].data["answeredYes"], .bool(true))
+        XCTAssertEqual(recs[0].data["numericValue"], .number(2))
+        XCTAssertEqual(recs[0].data["notes"], .string("two beers"))
+        XCTAssertEqual(recs[1].data["answeredYes"], .bool(false))
+        XCTAssertEqual(recs[1].data["device_id"], .string("whoop-1"))
+    }
+
+    func test_journal_is_synced_as_a_noop_kind() {
+        XCTAssertTrue(SyncKind.noop.contains(.noop_journal))
+        XCTAssertEqual(SyncKind.noop.last, .hr_minute)
+    }
+
     func test_intake_from_defaults_and_metric_series() async throws {
         try await makeFixture("""
         INSERT INTO metricSeries (deviceId, day, key, value) VALUES

@@ -5,10 +5,10 @@ public enum SyncKind: String, CaseIterable, Codable, Sendable {
     // owned by extras (also restored from the server)
     case foods, meals, targets, food_entries
     // read from NOOP's own database
-    case sleep_sessions, daily_metrics, hr_minute, workouts, noop_intake
+    case sleep_sessions, daily_metrics, hr_minute, workouts, noop_intake, noop_journal
 
     public static let extras: [SyncKind] = [.foods, .meals, .targets, .food_entries]
-    public static let noop: [SyncKind] = [.sleep_sessions, .daily_metrics, .workouts, .noop_intake, .hr_minute]
+    public static let noop: [SyncKind] = [.sleep_sessions, .daily_metrics, .workouts, .noop_intake, .noop_journal, .hr_minute]
 }
 
 /// Any JSON value. The `data` payload of a server record.
