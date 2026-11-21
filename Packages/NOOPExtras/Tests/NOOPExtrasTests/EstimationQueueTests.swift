@@ -85,7 +85,8 @@ final class EstimationQueueTests: XCTestCase {
     func test_malformed_then_ok_on_retry() async throws {
         let e = try pendingPhoto()
         let p = StubProvider([.failure(.malformed("x")), .success(est)])
-        XCTAssertEqual(await queue(p).runPending(), 1)
+        let ran = await queue(p).runPending()
+        XCTAssertEqual(ran, 1)
         XCTAssertEqual(try store.entry(id: e.id)?.status, .logged)
     }
 
@@ -120,16 +121,19 @@ final class EstimationQueueTests: XCTestCase {
         e.attempts = EstimationQueue.maxAttempts
         try store.save(e)
         let p = StubProvider([.success(est)])
-        XCTAssertEqual(await queue(p).runPending(), 0)
+        let ran = await queue(p).runPending()
+        XCTAssertEqual(ran, 0)
         XCTAssertEqual(p.calls, 0)
         try queue(p).retry(entryId: e.id)
-        XCTAssertEqual(await queue(p).runPending(), 1)
+        let ranAfterRetry = await queue(p).runPending()
+        XCTAssertEqual(ranAfterRetry, 1)
     }
 
     func test_offline_stops_the_run() async throws {
         _ = try pendingPhoto(); _ = try pendingPhoto()
         let p = StubProvider([.failure(.offline), .success(est)])
-        XCTAssertEqual(await queue(p).runPending(), 0)
+        let ran = await queue(p).runPending()
+        XCTAssertEqual(ran, 0)
         XCTAssertEqual(p.calls, 1)
     }
 
