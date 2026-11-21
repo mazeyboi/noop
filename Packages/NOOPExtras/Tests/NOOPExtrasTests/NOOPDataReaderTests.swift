@@ -83,19 +83,19 @@ final class NOOPDataReaderTests: XCTestCase {
     func test_hr_minute_aggregates() async throws {
         try await makeFixture("""
         INSERT INTO hrSample (deviceId, ts, bpm) VALUES
-          ('whoop-1', 1795000000, 60), ('whoop-1', 1795000010, 62), ('whoop-1', 1795000020, 70),
-          ('whoop-1', 1795000080, 80),
-          ('polar-2', 1795000000, 100);
+          ('whoop-1', 1794999960, 60), ('whoop-1', 1794999970, 62), ('whoop-1', 1794999980, 70),
+          ('whoop-1', 1795000040, 80),
+          ('polar-2', 1794999960, 100);
         """)
         let r = reader()
         XCTAssertEqual(try r.hrDevices(), ["polar-2", "whoop-1"])
         let start = Date(timeIntervalSince1970: 1794960000), end = Date(timeIntervalSince1970: 1795046400)
-        XCTAssertEqual(try r.hrFirstDay(deviceId: "whoop-1"), Date(timeIntervalSince1970: 1795000000))
+        XCTAssertEqual(try r.hrFirstDay(deviceId: "whoop-1"), Date(timeIntervalSince1970: 1794999960))
         let fp = try XCTUnwrap(r.hrFingerprint(deviceId: "whoop-1", from: start, to: end))
         XCTAssertNil(try r.hrFingerprint(deviceId: "whoop-1", from: end, to: end.addingTimeInterval(86400)))
         let mins = try r.hrMinutes(deviceId: "whoop-1", from: start, to: end)
         XCTAssertEqual(mins.count, 2)
-        let m0 = 1795000000 / 60 * 60
+        let m0 = 1794999960
         XCTAssertEqual(mins[0].id, "whoop-1|\(m0)")
         XCTAssertEqual(mins[0].data["at"], .string(ExtrasCodec.wireDate(Date(timeIntervalSince1970: Double(m0)))))
         XCTAssertEqual(mins[0].data["bpm"], .number(64))
@@ -104,7 +104,7 @@ final class NOOPDataReaderTests: XCTestCase {
         XCTAssertEqual(mins[0].data["n"], .number(3))
         // fingerprint changes when a late sample arrives
         let q = try XCTUnwrap(writer)
-        try await q.write { try $0.execute(sql: "INSERT INTO hrSample (deviceId, ts, bpm) VALUES ('whoop-1', 1795000090, 90)") }
+        try await q.write { try $0.execute(sql: "INSERT INTO hrSample (deviceId, ts, bpm) VALUES ('whoop-1', 1795000050, 90)") }
         XCTAssertNotEqual(try r.hrFingerprint(deviceId: "whoop-1", from: start, to: end), fp)
     }
 
