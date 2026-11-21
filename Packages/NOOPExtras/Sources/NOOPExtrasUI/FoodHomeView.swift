@@ -3,16 +3,50 @@ import NOOPExtras
 import StrandDesign
 import SwiftUI
 
-/// The row NOOP's "More" tab shows. The only thing the app needs from this package besides the
-/// foreground hook.
+/// The row NOOP's "More" tab shows. Styled like upstream's own (private) `MoreRow` in RootTabView:
+/// accent icon, primary title, chevron, hairline underneath.
 public struct ExtrasMoreRow: View {
     public init() {}
     public var body: some View {
         NavigationLink {
             FoodHomeView()
+                .background(StrandPalette.surfaceBase.ignoresSafeArea())
         } label: {
-            Label("Food", systemImage: "fork.knife")
+            HStack(spacing: 14) {
+                Image(systemName: "fork.knife")
+                    .font(.system(size: 17, weight: .regular))
+                    .foregroundStyle(StrandPalette.accent)
+                    .frame(width: 26, alignment: .center)
+                Text("Food")
+                    .font(StrandFont.body)
+                    .foregroundStyle(StrandPalette.textPrimary)
+                Spacer(minLength: 8)
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(StrandPalette.textTertiary)
+            }
+            .padding(.horizontal, 16)
+            .frame(minHeight: 44)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .contentShape(Rectangle())
+            .overlay(alignment: .bottom) {
+                Rectangle().fill(StrandPalette.hairline).frame(height: 1).padding(.leading, 16)
+            }
         }
+        .buttonStyle(.plain)
+    }
+}
+
+/// The Food tab. NOOP's tab bar shows it in Coach's slot when the AI Coach is switched off
+/// (Settings → AI Coach); iPhone fits five tabs.
+public struct ExtrasFoodTab: View {
+    public init() {}
+    public var body: some View {
+        NavigationStack {
+            FoodHomeView()
+                .background(StrandPalette.surfaceBase.ignoresSafeArea())
+        }
+        .tabItem { Label("Food", systemImage: "fork.knife") }
     }
 }
 
