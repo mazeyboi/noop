@@ -1,4 +1,4 @@
-# Daily: pick up a new upstream NOOP release and ship it with the fork's extras.
+# Every 6 hours: pick up a new upstream NOOP release and ship it with the fork's extras.
 #
 #   merge    find ryanbr/noop's latest release tag; if main doesn't have it yet, merge it
 #            (.github/fork/scripts/merge-upstream.sh) and push the result to sync/<tag>.
@@ -15,7 +15,8 @@ name: Sync upstream
 
 on:
   schedule:
-    - cron: '23 5 * * *'
+    # Every 6 h: a run with nothing new takes ~20 s on Linux; GitHub sometimes drops scheduled runs.
+    - cron: '23 */6 * * *'
   workflow_dispatch:
     inputs:
       upstream_ref:
