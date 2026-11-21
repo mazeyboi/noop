@@ -139,6 +139,7 @@ struct RootTabView: View {
             if coachEnabled {
                 tab(CoachView(), "Coach", "sparkles", path: $tabPaths[3], scrollSignal: scrollTop[3]).tag(3)
             }
+            if !coachEnabled { ExtrasFoodTab().tag(3) } // fork: Food takes Coach's slot when Coach is off (EXTRAS_PATCHES.md)
             moreTab(path: $tabPaths[4], scrollSignal: scrollTop[4]).tag(4)
         }
         .tint(StrandPalette.accent)

@@ -160,6 +160,8 @@ jobs:
           # Read-only fetch of the upstream base tag, to list the fork's own commits on top of it.
           git fetch --quiet --no-tags https://github.com/ryanbr/noop.git "refs/tags/v${BASE}:refs/tags/v${BASE}" || true
           {
+            echo "> **Pre-release: not installed yet.** To put it on the phone, edit this release and tick **Set as the latest release**. The VM 112 updater installs only the latest (non-pre-) release."
+            echo
             echo "NOOP **${BASE}** (upstream [v${BASE}](https://github.com/ryanbr/noop/releases/tag/v${BASE})) plus this fork's extras."
             echo
             echo "- IPA: \`${NAME}\` (unsigned, bundle ID \`com.noopapp.noop\`, includes NOOPWidgets)"
@@ -174,7 +176,9 @@ jobs:
               echo "- (upstream tag not found)"
             fi
           } > notes.md
-          gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --target "$SHA" --latest \
+          # Published as a PRE-release: the updater only installs releases/latest, so nothing reaches the
+          # phone until Oliver approves it on GitHub ("Set as the latest release").
+          gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --target "$SHA" --prerelease \
             --title "NOOP ${TAG}" --notes-file notes.md "out/$NAME" "out/$NAME.sha256"
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
-          echo "Published $TAG" >> "$GITHUB_STEP_SUMMARY"
+          echo "Published $TAG as a pre-release (approve it on GitHub to install)" >> "$GITHUB_STEP_SUMMARY"
