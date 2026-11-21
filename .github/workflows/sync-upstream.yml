@@ -82,7 +82,9 @@ jobs:
             git fetch --quiet --no-tags "$up" "+refs/heads/$REF:refs/remotes/upstream/$REF"
             target="refs/remotes/upstream/$REF"
           fi
-          out=$(bash .github/fork/scripts/merge-upstream.sh "$target"); rc=$?
+          # The step shell runs with -e: capture the status explicitly or exit 2/3 would end it here.
+          rc=0
+          out=$(bash .github/fork/scripts/merge-upstream.sh "$target") || rc=$?
           case $rc in
             0)
               git push --force origin "HEAD:refs/heads/sync/$REF" || exit 1
@@ -90,8 +92,10 @@ jobs:
               { echo "build=true"; echo "sha=$(git rev-parse HEAD)"; } >> "$GITHUB_OUTPUT" ;;
             3)
               head=$(git rev-parse HEAD)
-              if git ls-remote --tags origin | grep -E "^$head\s+refs/tags/v[0-9.]+-extras\.[0-9]+" >/dev/null; then
-                echo "main already has $REF and is released. Nothing to do." >> "$GITHUB_STEP_SUMMARY"
+              # Latest fork release reachable from main; CI-only commits (.github/) don't need a release.
+              last=$(git describe --tags --match 'v*-extras.*' --abbrev=0 HEAD 2>/dev/null || true)
+              if [ -n "$last" ] && git diff --quiet "$last" HEAD -- . ':(exclude).github'; then
+                echo "main already has $REF and its app code is released ($last). Nothing to do." >> "$GITHUB_STEP_SUMMARY"
                 echo "build=false" >> "$GITHUB_OUTPUT"
               else
                 echo "main already has $REF but main itself isn't released yet: building it." >> "$GITHUB_STEP_SUMMARY"
