@@ -38,6 +38,10 @@ public struct DayTotals: Equatable, Sendable {
     public var logged: Nutrients
     /// Entries not counted yet: photos waiting for (or failing) an estimate.
     public var pendingCount: Int
+
+    public init(logged: Nutrients, pendingCount: Int) {
+        self.logged = logged; self.pendingCount = pendingCount
+    }
 }
 
 /// All reads and writes of the extras database.
