@@ -76,6 +76,7 @@ public enum ExtrasDatabase {
                 t.column("kind", .text).notNull()
                 t.column("id", .text).notNull()
                 t.column("hash", .text).notNull()
+                t.column("data", .text)          // last sent data, so a removal can be sent as a tombstone
                 t.primaryKey(["kind", "id"])
             }
             try db.create(table: "kv") { t in

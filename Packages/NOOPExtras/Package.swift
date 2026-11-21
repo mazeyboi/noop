@@ -36,7 +36,7 @@ let package = Package(
                 .product(name: "WhoopStore", package: "WhoopStore"),
                 .product(name: "GRDB", package: "GRDB.swift"),
             ],
-            resources: [.copy("Fixtures")]
+            exclude: ["Fixtures"]
         ),
     ]
 )
