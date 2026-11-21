@@ -116,6 +116,17 @@ public final class NOOPDataReader: NOOPRecordSource, @unchecked Sendable {
             }
         case .noop_intake:
             return caffeine(now: now) + (try hydration(now: now))
+        case .noop_journal:
+            // NOOP's daily journal (yes/no answers with an optional number and note).
+            return try read([]) { db in
+                try Row.fetchAll(db, sql: "SELECT * FROM journal ORDER BY day, question").map { row in
+                    let dev: String = row["deviceId"], day: String = row["day"], question: String = row["question"]
+                    var d = Self.data(from: row)
+                    d["answeredYes"] = .bool(((row["answeredYes"] as Int64?) ?? 0) != 0)
+                    d["device_id"] = .string(dev)
+                    return SyncRecord(id: "\(dev)|\(day)|\(question)", updatedAt: now, deleted: false, data: d)
+                }
+            }
         default:
             return []
         }
