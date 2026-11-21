@@ -1,0 +1,32 @@
+{
+ "count": 2,
+ "page": 1,
+ "products": [
+  {
+   "code": "5701234",
+   "product_name": "Skyr naturel",
+   "brands": "Arla",
+   "nutriments": {
+    "energy-kcal_100g": 63,
+    "proteins_100g": 11,
+    "carbohydrates_100g": 4,
+    "fat_100g": 0.2
+   }
+  },
+  {
+   "code": "5705678",
+   "product_name": "",
+   "brands": "Nope",
+   "nutriments": {}
+  },
+  {
+   "code": "5709999",
+   "product_name": "Skyr vanilje",
+   "brands": "Arla",
+   "nutriments": {
+    "energy-kcal_100g": 77,
+    "proteins_100g": 9.5
+   }
+  }
+ ]
+}

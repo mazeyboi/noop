@@ -1,0 +1,14 @@
+{
+ "code": "5740700000000",
+ "status": 1,
+ "product": {
+  "code": "5740700000000",
+  "product_name": "Pilsner",
+  "brands": "Tuborg",
+  "nutriments": {
+   "energy_100g": 172,
+   "carbohydrates_100g": 3.2,
+   "alcohol_100g": 4.6
+  }
+ }
+}

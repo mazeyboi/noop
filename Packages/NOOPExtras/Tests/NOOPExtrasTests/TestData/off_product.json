@@ -1,0 +1,22 @@
+{
+ "code": "5741000123456",
+ "status": 1,
+ "status_verbose": "product found",
+ "product": {
+  "code": "5741000123456",
+  "product_name": "Energidrik Original",
+  "brands": "Cult",
+  "serving_quantity": "250",
+  "serving_size": "250 ml",
+  "nutriments": {
+   "energy-kcal_100g": 46,
+   "proteins_100g": 0,
+   "carbohydrates_100g": 11,
+   "sugars_100g": 11,
+   "fat_100g": 0,
+   "fiber_100g": 0,
+   "salt_100g": 0.2,
+   "caffeine_100g": 0.032
+  }
+ }
+}
