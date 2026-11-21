@@ -1,0 +1,13 @@
+{
+ "id": "msg_2",
+ "type": "message",
+ "role": "assistant",
+ "model": "claude-haiku-5-5",
+ "content": [],
+ "stop_reason": "refusal",
+ "stop_details": {
+  "type": "refusal",
+  "category": null,
+  "explanation": "Declined."
+ }
+}

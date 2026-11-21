@@ -1,0 +1,22 @@
+{
+ "id": "msg_1",
+ "type": "message",
+ "role": "assistant",
+ "model": "claude-haiku-5-5",
+ "content": [
+  {
+   "type": "thinking",
+   "thinking": "",
+   "signature": "x"
+  },
+  {
+   "type": "text",
+   "text": "{\"items\": [{\"name\": \"Rugbr\\u00f8d with leverpostej\", \"grams\": 120, \"kcal\": 290, \"protein_g\": 11, \"carbs_g\": 34, \"fat_g\": 11, \"fiber_g\": 7, \"caffeine_mg\": 0, \"alcohol_g\": 0}, {\"name\": \"Coffee\", \"grams\": 240, \"kcal\": 2, \"protein_g\": 0.3, \"carbs_g\": 0, \"fat_g\": 0, \"fiber_g\": 0, \"caffeine_mg\": 95, \"alcohol_g\": 0}], \"confidence\": \"medium\", \"note\": \"Butter on bread assumed.\"}"
+  }
+ ],
+ "stop_reason": "end_turn",
+ "usage": {
+  "input_tokens": 1500,
+  "output_tokens": 200
+ }
+}

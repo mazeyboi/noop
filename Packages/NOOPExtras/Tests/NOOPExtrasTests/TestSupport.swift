@@ -5,7 +5,7 @@ import XCTest
 func fixture(_ name: String, file: StaticString = #filePath) -> Data {
     // Read from the source tree: simpler and sturdier than resource-bundle lookup across toolchains.
     let url = URL(fileURLWithPath: "\(file)").deletingLastPathComponent()
-        .appendingPathComponent("Fixtures").appendingPathComponent(name)
+        .appendingPathComponent("TestData").appendingPathComponent(name)
     guard let data = try? Data(contentsOf: url) else { fatalError("missing fixture \(url.path)") }
     return data
 }
