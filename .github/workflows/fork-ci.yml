@@ -34,6 +34,8 @@ jobs:
 
   packages:
     needs: scripts
+    # extras/** branches iterate on Packages/NOOPExtras only (the jobs below); main and PRs run everything.
+    if: ${{ !startsWith(github.ref, 'refs/heads/extras/') }}
     runs-on: macos-15
     timeout-minutes: 45
     strategy:
@@ -45,3 +47,31 @@ jobs:
       - name: Test ${{ matrix.package }}
         run: swift test
         working-directory: Packages/${{ matrix.package }}
+
+  # The fork's own package: unit tests on macOS, plus an iOS compile of the UI target (which is
+  # iOS-only code and so is not compiled by `swift test`).
+  extras-test:
+    runs-on: macos-15
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v5
+      - name: swift test (NOOPExtras)
+        working-directory: Packages/NOOPExtras
+        run: |
+          swift test > /tmp/extras-test.log 2>&1 && { grep -E "Executed|passed|failed" /tmp/extras-test.log | tail -5; exit 0; }
+          grep -E "error:|failed|XCTAssert" /tmp/extras-test.log | head -120
+          tail -30 /tmp/extras-test.log
+          exit 1
+
+  extras-ios:
+    runs-on: macos-26
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v5
+      - name: Build NOOPExtrasUI for iOS
+        working-directory: Packages/NOOPExtras
+        run: |
+          xcodebuild -scheme NOOPExtrasUI -destination 'generic/platform=iOS' -derivedDataPath /tmp/dd             CODE_SIGNING_ALLOWED=NO build > /tmp/extras-ios.log 2>&1 && { tail -3 /tmp/extras-ios.log; exit 0; }
+          grep -E "error:" /tmp/extras-ios.log | sort -u | head -120
+          tail -30 /tmp/extras-ios.log
+          exit 1
