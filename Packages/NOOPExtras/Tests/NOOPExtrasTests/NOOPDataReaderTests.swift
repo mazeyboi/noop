@@ -40,7 +40,7 @@ final class NOOPDataReaderTests: XCTestCase {
     func test_reader_missing_database_is_empty() throws {
         let r = NOOPDataReader(databaseURL: dir.appendingPathComponent("nope.sqlite"), defaults: defaults)
         for kind in [SyncKind.sleep_sessions, .daily_metrics, .workouts, .noop_intake] {
-            XCTAssertEqual(try r.records(kind: kind), [])
+            XCTAssertNil(try r.records(kind: kind), "a missing database is \"unknown\", never \"everything deleted\"")
         }
         XCTAssertEqual(try r.hrDevices(), [])
         XCTAssertFalse(FileManager.default.fileExists(atPath: dir.appendingPathComponent("nope.sqlite").path))
@@ -57,7 +57,7 @@ final class NOOPDataReaderTests: XCTestCase {
         """)
         let r = reader()
 
-        let sleep = try r.records(kind: .sleep_sessions)
+        let sleep = try XCTUnwrap(r.records(kind: .sleep_sessions))
         XCTAssertEqual(sleep.count, 1)
         XCTAssertEqual(sleep[0].id, "whoop-1|1794960000")
         XCTAssertEqual(sleep[0].data["start_at"], .string(ExtrasCodec.wireDate(Date(timeIntervalSince1970: 1794960000))))
@@ -67,13 +67,13 @@ final class NOOPDataReaderTests: XCTestCase {
         XCTAssertNil(sleep[0].data["motionJSON"], "big per-epoch blobs stay on the phone")
         XCTAssertEqual(sleep[0].data["device_id"], .string("whoop-1"))
 
-        let daily = try r.records(kind: .daily_metrics)
+        let daily = try XCTUnwrap(r.records(kind: .daily_metrics))
         XCTAssertEqual(daily.map(\.id), ["whoop-1|2026-11-17"])
         XCTAssertEqual(daily[0].data["day"], .string("2026-11-17"))
         XCTAssertEqual(daily[0].data["recovery"], .number(71))
         XCTAssertEqual(daily[0].data["steps"], .number(8123))
 
-        let workouts = try r.records(kind: .workouts)
+        let workouts = try XCTUnwrap(r.records(kind: .workouts))
         XCTAssertEqual(workouts.map(\.id), ["whoop-1|1795010000|running"])
         XCTAssertEqual(workouts[0].data["sport"], .string("running"))
         XCTAssertEqual(workouts[0].data["zones"], .array([60, 300, 900, 1800, 540].map { .number($0) }))
@@ -119,7 +119,7 @@ final class NOOPDataReaderTests: XCTestCase {
                        ["id": "7A1C1E2B-0000-4000-8000-000000000002", "at": at.timeIntervalSinceReferenceDate + 3600,
                         "externalId": "HK-1"]]
         defaults.set(try JSONSerialization.data(withJSONObject: intakes), forKey: "caffeine.intakes")
-        let recs = try reader().records(kind: .noop_intake)
+        let recs = try XCTUnwrap(reader().records(kind: .noop_intake))
         let caffeine = recs.filter { $0.id.hasPrefix("caffeine|") }
         XCTAssertEqual(caffeine.count, 2)
         let first = try XCTUnwrap(caffeine.first { $0.id == "caffeine|7A1C1E2B-0000-4000-8000-000000000001" })

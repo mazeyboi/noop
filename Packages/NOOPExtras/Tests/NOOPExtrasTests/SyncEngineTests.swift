@@ -55,7 +55,8 @@ final class FakeNOOP: NOOPRecordSource, @unchecked Sendable {
     var byKind: [SyncKind: [SyncRecord]] = [:]
     var hr: [String: [Date: (fp: String, recs: [SyncRecord])]] = [:]   // device -> dayStart -> data
     var hrMinuteCalls = 0
-    func records(kind: SyncKind) throws -> [SyncRecord] { byKind[kind] ?? [] }
+    var unavailable: Set<SyncKind> = []
+    func records(kind: SyncKind) throws -> [SyncRecord]? { unavailable.contains(kind) ? nil : (byKind[kind] ?? []) }
     func hrDevices() throws -> [String] { Array(hr.keys).sorted() }
     func hrFirstDay(deviceId: String) throws -> Date? { hr[deviceId]?.keys.min() }
     func hrFingerprint(deviceId: String, from: Date, to: Date) throws -> String? { hr[deviceId]?[from]?.fp }

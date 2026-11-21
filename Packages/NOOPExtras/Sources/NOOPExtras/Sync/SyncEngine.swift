@@ -4,8 +4,9 @@ import GRDB
 
 /// What the engine needs from NOOP's own database (implemented by `NOOPDataReader`).
 public protocol NOOPRecordSource: Sendable {
-    /// sleep_sessions, daily_metrics, workouts, noop_intake: every current record.
-    func records(kind: SyncKind) throws -> [SyncRecord]
+    /// sleep_sessions, daily_metrics, workouts, noop_intake: every current record. nil = can't tell right
+    /// now (database missing): never read as "everything was deleted".
+    func records(kind: SyncKind) throws -> [SyncRecord]?
     func hrDevices() throws -> [String]
     func hrFirstDay(deviceId: String) throws -> Date?
     /// A cheap summary of one device-day of heart rate; nil when there's none.
@@ -33,6 +34,9 @@ public final class SyncEngine: @unchecked Sendable {
     public static let maxHrDaysPerRun = 60
     static let lastSuccessKey = "sync.lastSuccess"
     static let lastReportKey = "sync.lastReport"
+    /// More rejected records than this in one send means the server rejects everything (an API change, a
+    /// client bug): stop and mark nothing, rather than quarantining every record for good.
+    static let maxQuarantinePerSend = 3
 
     let store: ExtrasStore
     public let api: SyncAPI?
@@ -42,6 +46,7 @@ public final class SyncEngine: @unchecked Sendable {
     let now: () -> Date
     private let lock = NSLock()
     private var running = false
+    private var quarantinedThisSend: [(kind: SyncKind, id: String)] = []
 
     public init(store: ExtrasStore, api: SyncAPI?, reader: NOOPRecordSource?, photos: PhotoStore,
                 calendar: Calendar = .current, now: @escaping () -> Date = Date.init) {
@@ -76,7 +81,8 @@ public final class SyncEngine: @unchecked Sendable {
             report.photos = try await uploadPhotos(api: api)
             if let reader {
                 for kind in SyncKind.noop where kind != .hr_minute {
-                    let n = try await syncLedgered(kind, try reader.records(kind: kind), api: api, report: &report)
+                    guard let current = try reader.records(kind: kind) else { continue }
+                    let n = try await syncLedgered(kind, current, api: api, report: &report)
                     if n > 0 { report.sent[kind] = n }
                 }
                 let hr = try await syncHeartRate(reader, api: api, report: &report)
@@ -98,6 +104,7 @@ public final class SyncEngine: @unchecked Sendable {
     private func send(_ kind: SyncKind, _ records: [SyncRecord], api: SyncAPI, report: inout SyncReport) async throws -> Int {
         var accepted = 0
         var start = 0
+        quarantinedThisSend = []
         while start < records.count {
             let chunk = Array(records[start..<min(start + Self.batchSize, records.count)])
             accepted += try await sendChunk(kind, chunk, api: api, report: &report)
@@ -114,6 +121,12 @@ public final class SyncEngine: @unchecked Sendable {
             if chunk.count == 1 {
                 let payload = (try? String(decoding: ExtrasCodec.wireEncoder.encode(chunk[0]), as: UTF8.self)) ?? ""
                 try store.quarantine(kind: kind, id: chunk[0].id, error: why, payload: payload)
+                quarantinedThisSend.append((kind, chunk[0].id))
+                if quarantinedThisSend.count > Self.maxQuarantinePerSend {
+                    for q in quarantinedThisSend { try store.unquarantine(kind: q.kind, id: q.id) }
+                    quarantinedThisSend = []
+                    throw SyncError.rejected("the server rejected many \(kind.rawValue) records (\(why)); nothing was marked synced")
+                }
                 report.quarantined += 1
                 return 0
             }
@@ -167,14 +180,23 @@ public final class SyncEngine: @unchecked Sendable {
             toSend.append(r)
             newEntries.append((r.id, h, String(decoding: (try? ExtrasCodec.wireEncoder.encode(r.data)) ?? Data(), as: UTF8.self)))
         }
-        let removed = known.keys.filter { !seen.contains($0) }.sorted()
+        var removed = known.keys.filter { !seen.contains($0) }.sorted()
+        // NOOP keeps only 48 h of caffeine intakes: ageing out isn't a deletion. Forget them quietly.
+        let aged = removed.filter { $0.hasPrefix("caffeine|") }
+        removed.removeAll { $0.hasPrefix("caffeine|") }
+        // Many rows vanishing at once is NOOP rewriting its tables, not the user deleting: no tombstones
+        // this run (if they really are gone, the rows stay in the ledger and the server keeps them).
+        if removed.count > 20 && removed.count * 4 > known.count { removed = [] }
         for id in removed {
             let data = known[id]?.data.flatMap { try? JSONDecoder().decode([String: JSONValue].self, from: Data($0.utf8)) } ?? [:]
             toSend.append(SyncRecord(id: id, updatedAt: now(), deleted: true, data: data))
         }
-        guard !toSend.isEmpty else { return 0 }
+        guard !toSend.isEmpty else {
+            if !aged.isEmpty { try writeLedger(kind.rawValue, [], remove: aged) }
+            return 0
+        }
         let n = try await send(kind, toSend, api: api, report: &report)
-        try writeLedger(kind.rawValue, newEntries, remove: removed)
+        try writeLedger(kind.rawValue, newEntries, remove: removed + aged)
         return n
     }
 

@@ -81,7 +81,9 @@ public final class NOOPDataReader: NOOPRecordSource, @unchecked Sendable {
 
     // MARK: NOOPRecordSource
 
-    public func records(kind: SyncKind) throws -> [SyncRecord] {
+    public func records(kind: SyncKind) throws -> [SyncRecord]? {
+        // No database file (fresh install, reset, or upstream moved it): unknown, not "all deleted".
+        guard try db() != nil else { return nil }
         let now = Date()
         switch kind {
         case .sleep_sessions:

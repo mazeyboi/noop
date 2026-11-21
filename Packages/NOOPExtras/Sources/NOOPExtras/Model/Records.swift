@@ -67,14 +67,27 @@ public struct Food: Codable, Equatable, Identifiable, Sendable {
     }
 }
 
-public struct EntryItem: Codable, Equatable, Hashable, Sendable {
+public struct EntryItem: Codable, Equatable, Hashable, Identifiable, Sendable {
+    /// Stable identity for editing lists (older stored items without one get a fresh id on decode).
+    public var id: String
     public var name: String
     public var grams: Double?
     public var nutrients: Nutrients
     public var foodId: String?
 
-    public init(name: String, grams: Double?, nutrients: Nutrients, foodId: String? = nil) {
-        self.name = name; self.grams = grams; self.nutrients = nutrients; self.foodId = foodId
+    public init(id: String = UUID().uuidString, name: String, grams: Double?, nutrients: Nutrients, foodId: String? = nil) {
+        self.id = id; self.name = name; self.grams = grams; self.nutrients = nutrients; self.foodId = foodId
+    }
+
+    private enum CodingKeys: String, CodingKey { case id, name, grams, nutrients, foodId }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decodeIfPresent(String.self, forKey: .id) ?? UUID().uuidString
+        name = try c.decode(String.self, forKey: .name)
+        grams = try c.decodeIfPresent(Double.self, forKey: .grams)
+        nutrients = try c.decode(Nutrients.self, forKey: .nutrients)
+        foodId = try c.decodeIfPresent(String.self, forKey: .foodId)
     }
 
     public static func total(_ items: [EntryItem]) -> Nutrients { items.reduce(.zero) { $0 + $1.nutrients } }

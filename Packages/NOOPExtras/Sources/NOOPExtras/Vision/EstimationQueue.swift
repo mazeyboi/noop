@@ -56,22 +56,27 @@ public final class EstimationQueue: @unchecked Sendable {
     let timeZone: TimeZone
     private let lock = NSLock()
     private var running = false
+    private var inFlight = Set<String>()
 
     public init(store: ExtrasStore, photos: PhotoStore, provider: @escaping () -> FoodVisionProvider?,
                 timeZone: TimeZone = .current) {
         self.store = store; self.photos = photos; self.provider = provider; self.timeZone = timeZone
     }
 
-    /// Estimates every pending entry it can. Returns how many were estimated. Never throws: failures are
-    /// recorded on the entries themselves.
+    private enum Outcome { case estimated, stop, other }
+
+    private func claim(_ id: String) -> Bool { lock.withLock { inFlight.insert(id).inserted } }
+    private func release(_ id: String) { _ = lock.withLock { inFlight.remove(id) } }
+
+    /// Estimates every pending entry it can, including ones added while it runs. Returns how many were
+    /// estimated. Never throws: failures are recorded on the entries themselves.
     @discardableResult
     public func runPending() async -> Int {
         guard lock.withLock({ () -> Bool in if running { return false }; running = true; return true }) else { return 0 }
         defer { lock.withLock { running = false } }
 
-        guard let pending = try? store.pendingEntries().filter({ $0.attempts < Self.maxAttempts }),
-              !pending.isEmpty else { return 0 }
         guard let provider = provider() else {
+            let pending = (try? store.pendingEntries().filter { $0.attempts < Self.maxAttempts }) ?? []
             for var e in pending where e.error != ProviderError.notConfigured.message {
                 e.error = ProviderError.notConfigured.message
                 try? store.save(e)
@@ -79,40 +84,74 @@ public final class EstimationQueue: @unchecked Sendable {
             return 0
         }
         var done = 0
-        for e in pending {
-            guard let image = e.photoId.flatMap(photos.data(id:)) else {
-                var f = e
-                f.status = .failed
-                f.error = "The photo is missing. Enter this meal manually."
-                try? store.save(f)
-                continue
-            }
-            let req = EstimateRequest(image: image, hint: e.hint, meal: e.meal, at: e.at, timeZone: timeZone)
-            do {
-                let est: FoodEstimate
-                do {
-                    est = try await provider.estimate(req)
-                } catch ProviderError.malformed {
-                    est = try await provider.estimate(req) // one immediate retry
+        var seen = Set<String>()
+        while true {
+            let batch = (try? store.pendingEntries().filter { $0.attempts < Self.maxAttempts && !seen.contains($0.id) }) ?? []
+            if batch.isEmpty { break }
+            for e in batch {
+                seen.insert(e.id)
+                guard claim(e.id) else { continue }       // being estimated by estimate(entryId:)
+                let outcome = await process(e, provider)
+                release(e.id)
+                switch outcome {
+                case .estimated: done += 1
+                case .stop: return done
+                case .other: break
                 }
-                if (try? store.applyEstimate(est, to: e.id, provider: provider.kind.rawValue, model: provider.model)) != nil {
-                    done += 1
-                }
-            } catch let err as ProviderError {
-                guard var f = try? store.entry(id: e.id), !f.deleted, f.status == .pending else { continue }
-                f.error = err.message
-                if err.isRetryable {
-                    f.attempts += 1
-                } else {
-                    f.status = .failed
-                }
-                try? store.save(f)
-                if err == .offline || err == .timeout { break }
-            } catch {
-                continue
             }
         }
         return done
+    }
+
+    /// Estimates one entry now (a photo just taken), whether or not a backlog pass is running.
+    @discardableResult
+    public func estimate(entryId: String) async -> Bool {
+        guard let e = try? store.entry(id: entryId), !e.deleted, e.status == .pending else { return false }
+        guard let provider = provider() else {
+            var f = e
+            f.error = ProviderError.notConfigured.message
+            try? store.save(f)
+            return false
+        }
+        guard claim(entryId) else { return false }
+        defer { release(entryId) }
+        return await process(e, provider) == .estimated
+    }
+
+    private func process(_ e: FoodEntry, _ provider: FoodVisionProvider) async -> Outcome {
+        guard let image = e.photoId.flatMap(photos.data(id:)) else {
+            if var f = try? store.entry(id: e.id), !f.deleted, f.status == .pending {
+                f.status = .failed
+                f.error = "The photo is missing. Enter this meal manually."
+                try? store.save(f)
+            }
+            return .other
+        }
+        let req = EstimateRequest(image: image, hint: e.hint, meal: e.meal, at: e.at, timeZone: timeZone)
+        do {
+            let est: FoodEstimate
+            do {
+                est = try await provider.estimate(req)
+            } catch ProviderError.malformed {
+                est = try await provider.estimate(req) // one immediate retry
+            }
+            return (try? store.applyEstimate(est, to: e.id, provider: provider.kind.rawValue, model: provider.model)) != nil
+                ? .estimated : .other
+        } catch let err as ProviderError {
+            guard var f = try? store.entry(id: e.id), !f.deleted, f.status == .pending else { return .other }
+            f.error = err.message
+            let noSignal = err == .offline || err == .timeout
+            if err.isRetryable {
+                // Being offline is not the photo's fault: only real failures use up the retry budget.
+                if !noSignal { f.attempts += 1 }
+            } else {
+                f.status = .failed
+            }
+            try? store.save(f)
+            return noSignal ? .stop : .other
+        } catch {
+            return .other
+        }
     }
 
     /// "Tap to retry": back to pending with a fresh attempt budget.

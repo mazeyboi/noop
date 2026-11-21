@@ -6,9 +6,11 @@ final class StubProvider: FoodVisionProvider, @unchecked Sendable {
     let model = "stub-model"
     var results: [Result<FoodEstimate, ProviderError>]
     private(set) var calls = 0
+    var onCall: ((Int) -> Void)?
     init(_ results: [Result<FoodEstimate, ProviderError>]) { self.results = results }
     func estimate(_ r: EstimateRequest) async throws -> FoodEstimate {
         calls += 1
+        onCall?(calls)
         let r = results.isEmpty ? .failure(.server(500)) : results.removeFirst()
         return try r.get()
     }

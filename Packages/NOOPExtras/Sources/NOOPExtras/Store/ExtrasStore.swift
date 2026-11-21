@@ -314,6 +314,25 @@ public final class ExtrasStore: @unchecked Sendable {
         }
     }
 
+    func unquarantine(kind: SyncKind, id: String) throws {
+        try db.write { try $0.execute(sql: "DELETE FROM quarantine WHERE kind = ? AND id = ?", arguments: [kind.rawValue, id]) }
+    }
+
+    /// "Retry rejected records": queue every quarantined record to be sent again on the next sync.
+    public func requeueQuarantined() throws {
+        try db.write { db in
+            for row in try Row.fetchAll(db, sql: "SELECT kind, id FROM quarantine") {
+                let kindRaw: String = row["kind"], id: String = row["id"]
+                if let kind = SyncKind(rawValue: kindRaw), let table = Self.table(kind) {
+                    try db.execute(sql: "UPDATE \(table) SET dirty = 1 WHERE id = ?", arguments: [id])
+                } else {
+                    try db.execute(sql: "DELETE FROM syncLedger WHERE kind = ? AND id = ?", arguments: [kindRaw, id])
+                }
+            }
+            try db.execute(sql: "DELETE FROM quarantine")
+        }
+    }
+
     public func clearQuarantine() throws {
         try db.write { try $0.execute(sql: "DELETE FROM quarantine") }
     }
