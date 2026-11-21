@@ -146,7 +146,7 @@ struct EntryEditView: View {
                 DatePicker("Time", selection: $entry.at)
             }
             Section("Items") {
-                ForEach(entry.items.indices, id: \.self) { i in ItemEditor(item: $entry.items[i]) }
+                ForEach($entry.items) { $item in ItemEditor(item: $item) }
                     .onDelete { entry.items.remove(atOffsets: $0) }
                 Button { entry.items.append(EntryItem(name: "Item", grams: nil, nutrients: .zero)) } label: {
                     Label("Add item", systemImage: "plus")
@@ -181,10 +181,18 @@ struct EntryEditView: View {
     }
 
     func save() {
-        var e = entry
-        if let o = original, o.items != e.items || o.meal != e.meal || o.at != e.at {
-            if o.items != e.items { e.edited = true }
-            if e.status != .logged && !e.items.isEmpty { e.status = .logged; e.error = nil; e.edited = true }
+        guard let o = original, o.items != entry.items || o.meal != entry.meal || o.at != entry.at else {
+            close()   // nothing changed: don't overwrite an estimate that may have arrived meanwhile
+            return
+        }
+        // Apply only what was changed here onto the latest stored version.
+        var e = (try? app.store.entry(id: entry.id)) ?? entry
+        e.meal = entry.meal
+        e.at = entry.at
+        if o.items != entry.items {
+            e.items = entry.items
+            e.edited = true
+            if e.status != .logged && !e.items.isEmpty { e.status = .logged; e.error = nil }
         }
         app.save(e)
         close()
@@ -236,16 +244,29 @@ struct ItemEditor: View {
     @State private var scaleTarget = ""
 }
 
+/// A number field that updates its value on every keystroke (a decimal pad has no Return key, and a
+/// value-formatted TextField only commits on Return or focus loss, so Save would see the old value).
 struct NumberRow: View {
     let label: String
     @Binding var value: Double
+    @State private var text = ""
     init(_ label: String, value: Binding<Double>) { self.label = label; self._value = value }
     var body: some View {
         HStack {
             Text(label)
             Spacer()
-            TextField("0", value: $value, format: .number.precision(.fractionLength(0...1)))
+            TextField("0", text: $text)
                 .keyboardType(.decimalPad).multilineTextAlignment(.trailing).frame(maxWidth: 110)
+        }
+        .onAppear { text = NumberInput.text(value) }
+        // Compare as displayed text, so showing a rounded value never writes it back (that would mark
+        // an AI entry as edited just by opening it).
+        .onChange(of: text) { _, t in
+            let v = NumberInput.parse(t) ?? 0
+            if NumberInput.text(v) != NumberInput.text(value) { value = v }
+        }
+        .onChange(of: value) { _, v in
+            if NumberInput.text(v) != NumberInput.text(NumberInput.parse(text) ?? 0) { text = NumberInput.text(v) }
         }
     }
 }

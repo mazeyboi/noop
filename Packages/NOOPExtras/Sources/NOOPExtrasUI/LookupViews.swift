@@ -48,7 +48,7 @@ struct FoodSearchView: View {
         .navigationTitle("Search")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Close") { dismiss() } } }
-        .navigationDestination(item: $picked) { f in AmountView(food: f, method: f.source == .off ? .barcode : .search, onLogged: { dismiss() }) }
+        .navigationDestination(item: $picked) { f in AmountView(food: f, method: .search, onLogged: { dismiss() }) }
         .navigationDestination(isPresented: $custom) { CustomFoodView(barcode: nil) { f in picked = f; custom = false } }
     }
 

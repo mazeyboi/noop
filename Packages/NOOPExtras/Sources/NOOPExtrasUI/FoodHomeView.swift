@@ -51,14 +51,16 @@ public struct FoodHomeView: View {
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
-                Button { sheet = .settings } label: { Image(systemName: "gearshape") }
-                    .accessibilityLabel("Food settings")
+                if app.startupError == nil {
+                    Button { sheet = .settings } label: { Image(systemName: "gearshape") }
+                        .accessibilityLabel("Food settings")
+                }
             }
         }
         .sheet(item: $sheet, onDismiss: { app.reload() }) { s in
             NavigationStack { sheetView(s) }
         }
-        .onAppear { app.reload() }
+        .onAppear { app.refreshDay(); app.reload() }
         .task { await app.estimatePending() }
     }
 
@@ -134,10 +136,7 @@ public struct FoodHomeView: View {
         return app.day.formatted(.dateTime.weekday(.wide).day().month())
     }
 
-    func shiftDay(_ n: Int) {
-        app.day = Calendar.current.date(byAdding: .day, value: n, to: app.day) ?? app.day
-        app.reload()
-    }
+    func shiftDay(_ n: Int) { app.shiftDay(n) }
 
     var actions: some View {
         VStack(spacing: 10) {
@@ -202,7 +201,7 @@ struct TotalsCard: View {
                     .font(StrandFont.caption).foregroundStyle(StrandPalette.textSecondary)
             }
             if totals.pendingCount > 0 {
-                Label("\(totals.pendingCount) photo\(totals.pendingCount == 1 ? "" : "s") waiting for an estimate (not counted yet)",
+                Label("\(totals.pendingCount) photo\(totals.pendingCount == 1 ? "" : "s") not counted yet (waiting for an estimate, or tap to fix)",
                       systemImage: "hourglass")
                     .font(StrandFont.caption).foregroundStyle(StrandPalette.statusWarning)
             }

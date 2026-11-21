@@ -57,6 +57,7 @@ struct ExtrasSettingsView: View {
                             Text(q.error).font(StrandFont.caption).foregroundStyle(StrandPalette.statusCritical)
                         }
                     }
+                    Button("Send these again") { try? app.store.requeueQuarantined(); quarantined = []; Task { await app.sync(force: true) } }
                     Button("Clear list") { try? app.store.clearQuarantine(); quarantined = [] }
                 } header: {
                     Text("Rejected by the server (\(quarantined.count))")

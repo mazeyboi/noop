@@ -9,7 +9,8 @@ import UIKit
 public final class ExtrasApp: ObservableObject {
     public static let shared = ExtrasApp()
 
-    @Published public var day = Date()
+    @Published public private(set) var selection = DaySelection(now: Date())
+    public var day: Date { selection.day }
     @Published public private(set) var entries: [FoodEntry] = []
     @Published public private(set) var totals = DayTotals(logged: .zero, pendingCount: 0)
     @Published public private(set) var targets: Targets?
@@ -56,10 +57,23 @@ public final class ExtrasApp: ObservableObject {
     /// Called by the app when it comes to the foreground: estimate waiting photos, then sync.
     public func appBecameActive() {
         guard ready else { return }
+        refreshDay()
         Task {
             await estimatePending()
             await sync(force: false)
         }
+    }
+
+    /// Follows "today" across midnight (NOOP stays alive in the background for days).
+    public func refreshDay() {
+        var s = selection
+        s.refresh(now: Date())
+        if s != selection { selection = s; reload() }
+    }
+
+    public func shiftDay(_ n: Int) {
+        selection.shift(by: n, now: Date())
+        reload()
     }
 
     public func reload() {
@@ -79,7 +93,10 @@ public final class ExtrasApp: ObservableObject {
 
     // MARK: sync
 
-    var syncConfig: SyncConfig { SyncConfig.load(store: store, secrets: secrets) }
+    var syncConfig: SyncConfig {
+        guard let store else { return SyncConfig(token: nil) }
+        return SyncConfig.load(store: store, secrets: secrets)
+    }
 
     func engine() -> SyncEngine {
         let reader = NOOPDataReader.defaultURL().map { NOOPDataReader(databaseURL: $0) }
@@ -110,9 +127,9 @@ public final class ExtrasApp: ObservableObject {
     // MARK: provider
 
     var providerSettings: ProviderSettings? {
-        get { ProviderSettings.load(from: try? store.kv(ProviderSettings.kvKey)) }
+        get { store.flatMap { ProviderSettings.load(from: try? $0.kv(ProviderSettings.kvKey)) } }
         set {
-            try? store.setKV(ProviderSettings.kvKey, newValue?.json)
+            try? store?.setKV(ProviderSettings.kvKey, newValue?.json)
             objectWillChange.send()
         }
     }
@@ -143,7 +160,12 @@ public final class ExtrasApp: ObservableObject {
             e.hint = hint.isEmpty ? nil : hint
             try store.save(e)
             reload()
-            await estimatePending()
+            // This photo first (a backlog pass may be running), then anything else waiting.
+            estimating = true
+            await queue.estimate(entryId: e.id)
+            estimating = false
+            reload()
+            Task { await estimatePending() }
             return try store.entry(id: e.id)
         } catch {
             banner = "Couldn't save the photo: \(error.localizedDescription)"
@@ -163,16 +185,14 @@ public final class ExtrasApp: ObservableObject {
     func copyMeal(_ meal: MealType, fromDaysAgo n: Int) {
         let cal = Calendar.current
         guard let from = cal.date(byAdding: .day, value: -n, to: day) else { return }
-        let at = cal.isDateInToday(day) ? Date() : cal.date(bySettingHour: 12, minute: 0, second: 0, of: day) ?? day
+        let at = logTime
         let copied = (try? store.copyMeal(from: from, meal: meal, to: at)) ?? []
         banner = copied.isEmpty ? "Nothing logged for \(meal.title.lowercased()) that day." : nil
         reload()
     }
 
     /// The time to log at for the selected day: now if it's today, else noon that day.
-    var logTime: Date {
-        Calendar.current.isDateInToday(day) ? Date() : Calendar.current.date(bySettingHour: 12, minute: 0, second: 0, of: day) ?? day
-    }
+    var logTime: Date { selection.logTime(now: Date()) }
 }
 
 enum ImageTools {
