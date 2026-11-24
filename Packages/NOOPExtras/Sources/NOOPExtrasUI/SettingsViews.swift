@@ -14,17 +14,33 @@ struct ExtrasSettingsView: View {
     @State private var confirmRestore = false
     @State private var quarantined: [QuarantinedRecord] = []
     @State private var drinks: [DrinkPreset] = []
+    @State private var targetsStatus = ""
+    @State private var drinksStatus = ""
+    @State private var confirmClear = false
+    @State private var confirmResetDrinks = false
+    @State private var askDrinkName = false
+    @State private var newDrinkName = ""
 
     var body: some View {
         Form {
-            Section("Daily targets") {
+            Section {
                 NumberRow("kcal", value: $targets.kcal)
                 NumberRow("Protein g", value: $targets.proteinG)
                 NumberRow("Carbs g", value: $targets.carbsG)
                 NumberRow("Fat g", value: $targets.fatG)
                 NumberRow("Caffeine max mg", value: Binding(get: { targets.caffeineMaxMg ?? 0 }, set: { targets.caffeineMaxMg = $0 > 0 ? $0 : nil }))
                 NumberRow("Alcohol max g", value: Binding(get: { targets.alcoholMaxG ?? 0 }, set: { targets.alcoholMaxG = $0 > 0 ? $0 : nil }))
-                Button("Save targets") { try? app.store.save(targets); app.reload() }
+                Button("Save targets") {
+                    do { try app.store.save(targets); app.reload(); targetsStatus = "Saved." }
+                    catch { targetsStatus = "Couldn't save: \(error.localizedDescription)" }
+                }
+                if !targetsStatus.isEmpty { Text(targetsStatus).font(StrandFont.caption) }
+            } header: {
+                Text("Daily targets")
+            } footer: {
+                if app.targets == nil {
+                    Text("No targets saved yet. These numbers are only a suggestion: change them and tap Save targets.")
+                }
             }
             Section {
                 NavigationLink {
@@ -41,7 +57,6 @@ struct ExtrasSettingsView: View {
                     .textInputAutocapitalization(.never).autocorrectionDisabled()
                 Button("Save and test connection") { Task { await saveServer() } }
                 if !serverStatus.isEmpty { Text(serverStatus).font(StrandFont.caption) }
-                Button("Sync now") { Task { await app.sync(force: true) } }.disabled(app.syncing)
                 SyncStatusRow()
                 Button("Restore food log from server…", role: .destructive) { confirmRestore = true }
             } header: {
@@ -58,14 +73,20 @@ struct ExtrasSettingsView: View {
                         }
                     }
                     Button("Send these again") { try? app.store.requeueQuarantined(); quarantined = []; Task { await app.sync(force: true) } }
-                    Button("Clear list") { try? app.store.clearQuarantine(); quarantined = [] }
+                    Button("Clear list", role: .destructive) { confirmClear = true }
+                        .confirmationDialog("Drop these records without sending them?", isPresented: $confirmClear,
+                                            titleVisibility: .visible) {
+                            Button("Clear list", role: .destructive) { try? app.store.clearQuarantine(); quarantined = [] }
+                        } message: {
+                            Text("They never reach the server unless you edit the entries again.")
+                        }
                 } header: {
                     Text("Rejected by the server (\(quarantined.count))")
                 } footer: {
                     Text("These records were skipped so the rest could sync. Editing an entry sends it again.")
                 }
             }
-            Section("Drinks quick add") {
+            Section {
                 ForEach($drinks) { $d in
                     DisclosureGroup(d.name) {
                         NumberRow("ml", value: $d.ml)
@@ -74,8 +95,24 @@ struct ExtrasSettingsView: View {
                         NumberRow("Alcohol g", value: $d.alcoholG)
                     }
                 }
-                Button("Save drinks") { try? Drinks.save(drinks, store: app.store) }
-                Button("Reset to defaults") { drinks = Drinks.defaults; try? Drinks.save(drinks, store: app.store) }
+                .onDelete { drinks.remove(atOffsets: $0); saveDrinks() }
+                Button("Add a drink…") { newDrinkName = ""; askDrinkName = true }
+                    .alert("New drink", isPresented: $askDrinkName) {
+                        TextField("Name", text: $newDrinkName)
+                        Button("Add") { addDrink() }
+                        Button("Cancel", role: .cancel) {}
+                    }
+                Button("Save drinks") { saveDrinks() }
+                if !drinksStatus.isEmpty { Text(drinksStatus).font(StrandFont.caption) }
+                Button("Reset to defaults", role: .destructive) { confirmResetDrinks = true }
+                    .confirmationDialog("Replace your drinks with the five defaults?", isPresented: $confirmResetDrinks,
+                                        titleVisibility: .visible) {
+                        Button("Reset to defaults", role: .destructive) { drinks = Drinks.defaults; saveDrinks() }
+                    }
+            } header: {
+                Text("Drinks quick add")
+            } footer: {
+                Text("Swipe a drink left to remove it.")
             }
             Section("About") {
                 Text(GenericFoods.attribution).font(StrandFont.caption)
@@ -97,6 +134,22 @@ struct ExtrasSettingsView: View {
         } message: {
             Text("For a new or reset phone. Entries on this phone that never synced are lost.")
         }
+    }
+
+    func saveDrinks() {
+        do { try Drinks.save(drinks, store: app.store); drinksStatus = "Saved." }
+        catch { drinksStatus = "Couldn't save: \(error.localizedDescription)" }
+    }
+
+    func addDrink() {
+        let name = newDrinkName.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !name.isEmpty else { return }
+        // The name is the preset's identity, so it has to be unique.
+        guard !drinks.contains(where: { $0.name.caseInsensitiveCompare(name) == .orderedSame }) else {
+            drinksStatus = "There's already a drink called \(name)."; return
+        }
+        drinks.append(DrinkPreset(name: name, ml: 250, kcal: 0))
+        saveDrinks()
     }
 
     func saveServer() async {
@@ -127,6 +180,7 @@ struct ProviderSettingsView: View {
     @State private var key = ""
     @State private var testing = false
     @State private var testResult = ""
+    @State private var saveStatus = ""
 
     var body: some View {
         Form {
@@ -156,7 +210,13 @@ struct ProviderSettingsView: View {
                     }
                 } header: { Text("Model") }
                 Section {
-                    Button("Save") { save() }.bold()
+                    Button("Save") {
+                        save()
+                        saveStatus = app.provider() == nil
+                            ? "Saved, but the key, model or base URL is still missing, so photos will wait."
+                            : "Saved."
+                    }.bold()
+                    if !saveStatus.isEmpty { Text(saveStatus).font(StrandFont.caption) }
                     Button(testing ? "Testing…" : "Save and test with a sample photo") { Task { await test() } }.disabled(testing)
                     if !testResult.isEmpty { Text(testResult).font(StrandFont.caption) }
                 } footer: {
@@ -166,7 +226,8 @@ struct ProviderSettingsView: View {
                 Section {
                     Text("Without a provider, meal photos are saved and wait. They're estimated once you set one up.")
                         .font(StrandFont.caption)
-                    Button("Save") { app.providerSettings = nil }
+                    Button("Save") { app.providerSettings = nil; saveStatus = "Saved. No provider is set." }
+                    if !saveStatus.isEmpty { Text(saveStatus).font(StrandFont.caption) }
                 }
             }
         }
@@ -179,6 +240,7 @@ struct ProviderSettingsView: View {
             baseURL = s?.baseURL ?? ""
         }
         .onChange(of: kind) { old, new in
+            saveStatus = ""
             if old != nil, new != old { model = new?.suggestedModels.first ?? ""; testResult = "" }
             if old == nil, model.isEmpty { model = new?.suggestedModels.first ?? "" }
         }

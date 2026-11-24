@@ -90,6 +90,8 @@ struct SavedMealsView: View {
     @ObservedObject var app = ExtrasApp.shared
     @Environment(\.dismiss) var dismiss
     @State private var meals: [SavedMeal] = []
+    @State private var renaming: SavedMeal?
+    @State private var newName = ""
 
     var body: some View {
         List {
@@ -109,11 +111,28 @@ struct SavedMealsView: View {
                             .font(StrandFont.caption).foregroundStyle(StrandPalette.textSecondary).lineLimit(2)
                     }
                 }
+                .swipeActions(edge: .trailing) {
+                    Button(role: .destructive) {
+                        var d = m; d.deleted = true; try? app.store.save(d); load()
+                    } label: { Label("Delete", systemImage: "trash") }
+                }
+                .swipeActions(edge: .leading) {
+                    Button { newName = m.name; renaming = m } label: { Label("Rename", systemImage: "pencil") }
+                }
             }
-            .onDelete { idx in
-                for i in idx { var m = meals[i]; m.deleted = true; try? app.store.save(m) }
-                load()
+            if !meals.isEmpty {
+                Text("Swipe right to rename, left to delete.")
+                    .font(StrandFont.caption).foregroundStyle(StrandPalette.textTertiary)
             }
+        }
+        .alert("Rename meal", isPresented: Binding(get: { renaming != nil }, set: { if !$0 { renaming = nil } })) {
+            TextField("Name", text: $newName)
+            Button("Save") {
+                let name = newName.trimmingCharacters(in: .whitespacesAndNewlines)
+                if var m = renaming, !name.isEmpty { m.name = name; try? app.store.save(m); load() }
+                renaming = nil
+            }
+            Button("Cancel", role: .cancel) { renaming = nil }
         }
         .navigationTitle("Saved meals")
         .navigationBarTitleDisplayMode(.inline)
