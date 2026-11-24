@@ -146,8 +146,14 @@ public final class ExtrasApp: ObservableObject {
     }
 
     func delete(_ entry: FoodEntry) {
-        try? store.deleteEntry(id: entry.id)
+        do { try store.deleteEntry(id: entry.id) } catch { banner = "Couldn't delete: \(error.localizedDescription)" }
         reload()
+    }
+
+    /// When the last complete sync finished (kept across app restarts).
+    var lastSyncSuccess: Date? {
+        guard let store else { return nil }
+        return (try? store.kv(SyncEngine.lastSuccessKey)).flatMap(Double.init).map(Date.init(timeIntervalSince1970:))
     }
 
     /// Saves the photo as a pending entry right away (nothing is lost offline), then tries to estimate it.

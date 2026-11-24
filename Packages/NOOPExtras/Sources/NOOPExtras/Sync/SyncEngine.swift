@@ -32,7 +32,7 @@ public final class SyncEngine: @unchecked Sendable {
     public static let hrRecheckDays = 14
     /// First sync of a long history is spread over several runs.
     public static let maxHrDaysPerRun = 60
-    static let lastSuccessKey = "sync.lastSuccess"
+    public static let lastSuccessKey = "sync.lastSuccess"
     static let lastReportKey = "sync.lastReport"
     /// More rejected records than this in one send means the server rejects everything (an API change, a
     /// client bug): stop and mark nothing, rather than quarantining every record for good.

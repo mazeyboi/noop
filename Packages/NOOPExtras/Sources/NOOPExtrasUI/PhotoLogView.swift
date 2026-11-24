@@ -17,6 +17,7 @@ struct PhotoLogView: View {
     @State private var meal = MealType.suggested(for: Date())
     @State private var at = Date()
     @State private var working = false
+    @State private var autoOpened = false
     @State private var result: FoodEntry?
 
     var body: some View {
@@ -62,7 +63,9 @@ struct PhotoLogView: View {
                 }
                 .disabled(image == nil || working)
             } footer: {
-                Text("The photo and hint go to your chosen AI provider. Nothing else does.").font(StrandFont.caption)
+                Text(working
+                     ? "Estimating. This can take a little while. You can close this screen: the estimate keeps going and shows up in the list."
+                     : "The photo and hint go to your chosen AI provider. Nothing else does.").font(StrandFont.caption)
             }
         }
         .navigationTitle("Photo")
@@ -75,6 +78,14 @@ struct PhotoLogView: View {
             }
         }
         .onAppear { at = app.logTime; meal = MealType.suggested(for: at) }
+        .task {
+            // Straight to the camera (one tap fewer). The short wait lets the sheet finish presenting:
+            // a cover presented mid-transition is dropped.
+            guard !autoOpened, image == nil, UIImagePickerController.isSourceTypeAvailable(.camera) else { return }
+            autoOpened = true
+            try? await Task.sleep(nanoseconds: 500_000_000)
+            if image == nil { showCamera = true }
+        }
         .navigationDestination(item: $result) { e in EntryEditView(entry: e, isReview: true, onDone: { dismiss() }) }
     }
 }
@@ -119,6 +130,7 @@ struct EntryEditView: View {
     @State private var original: FoodEntry?
     @State private var saveMealName = ""
     @State private var askMealName = false
+    @State private var mealStatus = ""
 
     var body: some View {
         Form {
@@ -158,9 +170,9 @@ struct EntryEditView: View {
             Section {
                 Button(isReview ? "Looks right, save" : "Save") { save() }.bold()
                 Button("Save as a meal…") { askMealName = true }.disabled(entry.items.isEmpty)
-                if !isReview {
-                    Button("Delete entry", role: .destructive) { app.delete(entry); close() }
-                }
+                if !mealStatus.isEmpty { Text(mealStatus).font(StrandFont.caption) }
+                // Also on the review screen: a wrong estimate is already saved, so it must be removable here.
+                Button(isReview ? "Discard this entry" : "Delete entry", role: .destructive) { app.delete(entry); close() }
             }
         }
         .navigationTitle(isReview ? "Check estimate" : "Entry")
@@ -170,7 +182,9 @@ struct EntryEditView: View {
         .alert("Save as meal", isPresented: $askMealName) {
             TextField("Name", text: $saveMealName)
             Button("Save") {
-                try? app.store.save(SavedMeal(name: saveMealName.isEmpty ? entry.title : saveMealName, items: entry.items))
+                let name = saveMealName.isEmpty ? entry.title : saveMealName
+                do { try app.store.save(SavedMeal(name: name, items: entry.items)); mealStatus = "Saved as the meal “\(name)”." }
+                catch { mealStatus = "Couldn't save the meal: \(error.localizedDescription)" }
             }
             Button("Cancel", role: .cancel) {}
         }

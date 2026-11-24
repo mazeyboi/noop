@@ -87,6 +87,9 @@ struct AmountView: View {
     @State private var servings: Double = 1
     @State private var useServings = false
     @State private var meal = MealType.suggested(for: Date())
+    @Environment(\.dismiss) var dismiss
+    @State private var editing = false
+    @State private var confirmDelete = false
 
     var amountG: Double { useServings ? servings * (food.servingG ?? 100) : grams }
 
@@ -94,7 +97,9 @@ struct AmountView: View {
         Form {
             Section {
                 Text(food.displayName).font(StrandFont.headline)
-                Toggle("Favourite", isOn: Binding(get: { food.favourite }, set: { food.favourite = $0 }))
+                // Saved at once: it used to be lost unless you also tapped Log.
+                Toggle("Favourite", isOn: Binding(get: { food.favourite },
+                                                  set: { food.favourite = $0; try? app.store.save(food) }))
             }
             Section("Amount") {
                 if let s = food.servingG, s > 0 {
@@ -115,9 +120,25 @@ struct AmountView: View {
             Section {
                 Button("Log") { log() }.bold().disabled(amountG <= 0)
             }
+            if food.source == .custom {
+                Section {
+                    Button("Edit this food") { editing = true }
+                    Button("Delete this food", role: .destructive) { confirmDelete = true }
+                        .confirmationDialog("Delete \(food.name)?", isPresented: $confirmDelete, titleVisibility: .visible) {
+                            Button("Delete", role: .destructive) {
+                                var f = food; f.deleted = true; try? app.store.save(f); dismiss()
+                            }
+                        } message: {
+                            Text("Entries you already logged with it stay as they are.")
+                        }
+                }
+            }
         }
         .navigationTitle("Amount")
         .navigationBarTitleDisplayMode(.inline)
+        .navigationDestination(isPresented: $editing) {
+            CustomFoodView(barcode: food.barcode, editing: food) { f in food = f; editing = false }
+        }
         .onAppear {
             meal = MealType.suggested(for: app.logTime)
             if let s = food.servingG, s > 0 { grams = s }
@@ -140,12 +161,15 @@ struct AmountView: View {
 /// A food that isn't in any database (or a barcode Open Food Facts doesn't know).
 struct CustomFoodView: View {
     let barcode: String?
+    /// Set to change an existing custom food instead of creating one.
+    var editing: Food? = nil
     var onSaved: (Food) -> Void
     @ObservedObject var app = ExtrasApp.shared
     @State private var name = ""
     @State private var brand = ""
     @State private var per100 = Nutrients.zero
     @State private var serving: Double = 0
+    @State private var saveError = ""
 
     var body: some View {
         Form {
@@ -168,16 +192,25 @@ struct CustomFoodView: View {
             Section { NumberRow("Serving size g (optional)", value: $serving) }
             Section {
                 Button("Save food") {
-                    let f = Food(name: name.trimmingCharacters(in: .whitespaces), brand: brand.isEmpty ? nil : brand,
-                                 barcode: barcode, source: .custom, per100: per100, servingG: serving > 0 ? serving : nil)
-                    try? app.store.save(f)
-                    onSaved(f)
+                    var f = editing ?? Food(name: "", barcode: barcode, source: .custom, per100: .zero)
+                    f.name = name.trimmingCharacters(in: .whitespaces)
+                    f.brand = brand.isEmpty ? nil : brand
+                    f.per100 = per100
+                    f.servingG = serving > 0 ? serving : nil
+                    do { try app.store.save(f); onSaved(f) }
+                    catch { saveError = "Couldn't save: \(error.localizedDescription)" }
                 }
                 .disabled(name.trimmingCharacters(in: .whitespaces).isEmpty)
+                if !saveError.isEmpty { Text(saveError).font(StrandFont.caption).foregroundStyle(StrandPalette.statusCritical) }
             }
         }
-        .navigationTitle("Custom food")
+        .navigationTitle(editing == nil ? "Custom food" : "Edit food")
         .navigationBarTitleDisplayMode(.inline)
+        .onAppear {
+            if let e = editing, name.isEmpty {
+                name = e.name; brand = e.brand ?? ""; per100 = e.per100; serving = e.servingG ?? 0
+            }
+        }
     }
 }
 

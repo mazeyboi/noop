@@ -317,8 +317,9 @@ struct SyncStatusRow: View {
     }
     var text: String {
         if app.syncing { return "Syncing…" }
-        guard let r = app.lastSync else { return "Syncs to the health server on your home Wi-Fi." }
-        if let e = r.error { return e.message }
+        let last = app.lastSyncSuccess.map { "Last synced \($0.formatted(.relative(presentation: .named)))." }
+        guard let r = app.lastSync else { return last ?? "Syncs to the health server on your home Wi-Fi." }
+        if let e = r.error { return [e.message, last].compactMap { $0 }.joined(separator: " ") }
         let n = r.sent.values.reduce(0, +)
         return "Synced \(n) record\(n == 1 ? "" : "s")\(r.photos > 0 ? ", \(r.photos) photos" : "")"
             + (r.quarantined > 0 ? ", \(r.quarantined) rejected (see settings)" : "")
