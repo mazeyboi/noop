@@ -18,6 +18,8 @@ public final class ExtrasApp: ObservableObject {
     @Published public private(set) var syncing = false
     @Published public private(set) var estimating = false
     @Published public var banner: String?
+    /// The last deleted entry, offered for undo on the food screen.
+    @Published public private(set) var undoable: FoodEntry?
     public let startupError: String?
 
     let store: ExtrasStore!
@@ -112,11 +114,16 @@ public final class ExtrasApp: ObservableObject {
         reload()
     }
 
+    /// Sends this phone's unsynced changes first, so restoring never throws away a meal.
     func restore() async -> String {
+        await sync(force: true)
         do {
-            let n = try await engine().restore(force: true)
+            let n = try await engine().restore(force: false)
             reload()
             return "Restored \(n) records from the server."
+        } catch SyncError.localChanges {
+            let why = lastSync?.error?.message ?? ""
+            return "Couldn't send this phone's unsynced changes first, so nothing was replaced. \(why)"
         } catch let e as SyncError {
             return e.message
         } catch {
@@ -141,12 +148,23 @@ public final class ExtrasApp: ObservableObject {
     // MARK: logging
 
     func save(_ entry: FoodEntry) {
+        undoable = nil
         do { try store.save(entry) } catch { banner = "Couldn't save: \(error.localizedDescription)" }
         reload()
     }
 
     func delete(_ entry: FoodEntry) {
-        do { try store.deleteEntry(id: entry.id) } catch { banner = "Couldn't delete: \(error.localizedDescription)" }
+        do {
+            try store.deleteEntry(id: entry.id)
+            undoable = entry
+        } catch { banner = "Couldn't delete: \(error.localizedDescription)" }
+        reload()
+    }
+
+    func undoDelete() {
+        guard let e = undoable else { return }
+        undoable = nil
+        do { try store.undeleteEntry(id: e.id) } catch { banner = "Couldn't undo: \(error.localizedDescription)" }
         reload()
     }
 

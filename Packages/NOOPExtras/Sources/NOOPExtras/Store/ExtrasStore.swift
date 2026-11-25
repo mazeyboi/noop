@@ -162,6 +162,13 @@ public final class ExtrasStore: @unchecked Sendable {
         try save(e)
     }
 
+    /// Undo for a swipe-delete: the tombstone becomes a live entry again (and syncs as an edit).
+    public func undeleteEntry(id: String) throws {
+        guard var e = try entry(id: id), e.deleted else { return }
+        e.deleted = false
+        try save(e)
+    }
+
     public func entries(on day: Date, calendar: Calendar = .current) throws -> [FoodEntry] {
         let start = calendar.startOfDay(for: day)
         let end = calendar.date(byAdding: .day, value: 1, to: start)!

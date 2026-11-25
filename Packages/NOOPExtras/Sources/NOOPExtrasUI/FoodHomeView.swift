@@ -121,6 +121,15 @@ public struct FoodHomeView: View {
                         .onTapGesture { app.banner = nil }
                 }
             }
+            if app.undoable != nil {
+                Section {
+                    HStack {
+                        Text("Entry deleted.").font(StrandFont.subhead)
+                        Spacer()
+                        Button("Undo") { app.undoDelete() }
+                    }
+                }
+            }
             Section { actions }
             ForEach(MealType.allCases) { meal in
                 let items = app.entries.filter { $0.meal == meal }

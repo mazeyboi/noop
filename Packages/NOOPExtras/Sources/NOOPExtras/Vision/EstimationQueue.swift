@@ -25,6 +25,13 @@ public final class PhotoStore: @unchecked Sendable {
 
     public func url(id: String) -> URL { directory.appendingPathComponent("\(id).jpg") }
 
+    /// Stores a photo fetched back from the server under its existing id.
+    public func write(id: String, jpeg: Data) throws {
+        // the id becomes a file name: letters, digits, - and _ only (as the server enforces)
+        guard !id.isEmpty, id.allSatisfy({ $0.isASCII && ($0.isLetter || $0.isNumber || $0 == "-" || $0 == "_") }) else { return }
+        try jpeg.write(to: url(id: id), options: .atomic)
+    }
+
     public func data(id: String) -> Data? { try? Data(contentsOf: url(id: id)) }
 }
 
