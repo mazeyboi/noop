@@ -8,7 +8,9 @@ name: Fork CI
 on:
   push:
     branches: [main, 'fork/**', 'extras/**']
+    paths-ignore: ['**/*.md']
   pull_request:
+    paths-ignore: ['**/*.md']
   workflow_dispatch:
 
 permissions:

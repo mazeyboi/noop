@@ -93,9 +93,9 @@ jobs:
               { echo "build=true"; echo "sha=$(git rev-parse HEAD)"; } >> "$GITHUB_OUTPUT" ;;
             3)
               head=$(git rev-parse HEAD)
-              # Latest fork release reachable from main; CI-only commits (.github/) don't need a release.
+              # Latest fork release reachable from main; CI-only (.github/) and docs-only (*.md) commits don't need a release.
               last=$(git describe --tags --match 'v*-extras.*' --abbrev=0 HEAD 2>/dev/null || true)
-              if [ -n "$last" ] && git diff --quiet "$last" HEAD -- . ':(exclude).github'; then
+              if [ -n "$last" ] && git diff --quiet "$last" HEAD -- . ':(exclude).github' ':(exclude)*.md'; then
                 echo "main already has $REF and its app code is released ($last). Nothing to do." >> "$GITHUB_STEP_SUMMARY"
                 echo "build=false" >> "$GITHUB_OUTPUT"
               else
@@ -129,7 +129,8 @@ jobs:
 
   report:
     needs: [merge, build]
-    if: failure()
+    # cancelled(): GitHub cancels macOS jobs that never get a runner; the next 6-hourly run retries.
+    if: failure() || cancelled()
     runs-on: ubuntu-latest
     permissions:
       issues: write
@@ -141,7 +142,7 @@ jobs:
         run: |
           set -euo pipefail
           title="Upstream sync failed: ${REF:-unknown ref}"
-          body="The daily upstream sync failed, so nothing was published and the phone keeps the last good build.
+          body="The upstream sync failed or was cancelled (often: no macOS runner), so nothing was published and the phone keeps the last good build.
 
           Run: $RUN
 
