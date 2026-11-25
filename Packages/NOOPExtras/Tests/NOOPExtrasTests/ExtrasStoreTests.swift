@@ -55,6 +55,17 @@ final class ExtrasStoreTests: XCTestCase {
         XCTAssertEqual(dirty.first?.deleted, true)
     }
 
+    func test_undelete_restores_entry_and_marks_dirty() throws {
+        let e = logged(300, at: day(20))
+        try store.save(e)
+        try store.deleteEntry(id: e.id)
+        try store.markSynced(kind: .food_entries, records: store.dirty(kind: .food_entries))
+        clock += 60
+        try store.undeleteEntry(id: e.id)
+        XCTAssertEqual(try store.entries(on: day(20), calendar: cal).map(\.id), [e.id])
+        XCTAssertEqual(try store.dirty(kind: .food_entries).first?.deleted, false)
+    }
+
     func test_mark_synced_keeps_dirty_if_edited_after_send() throws {
         var e = logged(300, at: day(20))
         try store.save(e)

@@ -272,7 +272,13 @@ public final class SyncEngine: @unchecked Sendable {
         if !force, try store.hasUnsyncedChanges() { throw SyncError.localChanges }
         let snap = try await api.restore()
         try store.replaceAll(fromRestore: snap)
-        for p in snap.photos { try? store.addPhotoRecord(id: p.id, uploaded: true) }
+        for p in snap.photos {
+            try? store.addPhotoRecord(id: p.id, uploaded: true)
+            // best effort: a photo that fails to download only loses its thumbnail
+            if photos.data(id: p.id) == nil, let jpeg = try? await api.getPhoto(id: p.id) {
+                try? photos.write(id: p.id, jpeg: jpeg)
+            }
+        }
         return snap.foods.count + snap.meals.count + snap.targets.count + snap.entries.count
     }
 }

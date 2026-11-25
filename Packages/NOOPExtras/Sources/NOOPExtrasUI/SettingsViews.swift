@@ -132,7 +132,7 @@ struct ExtrasSettingsView: View {
         .confirmationDialog("Replace this phone's food log with the server's copy?", isPresented: $confirmRestore, titleVisibility: .visible) {
             Button("Restore from server", role: .destructive) { Task { serverStatus = await app.restore() } }
         } message: {
-            Text("For a new or reset phone. Entries on this phone that never synced are lost.")
+            Text("For a new or reset phone. This phone's unsynced changes are sent to the server first; if that fails, nothing is replaced.")
         }
     }
 

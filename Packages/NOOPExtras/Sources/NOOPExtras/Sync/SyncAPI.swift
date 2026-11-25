@@ -108,6 +108,12 @@ public struct SyncAPI: Sendable {
         _ = try await send(request("photos/\(id)", method: "PUT", body: jpeg, contentType: "image/jpeg", timeout: 60))
     }
 
+    /// nil when the server has no such photo.
+    public func getPhoto(id: String) async throws -> Data? {
+        let (data, code) = try await send(request("photos/\(id)", method: "GET", timeout: 60), ok: [200, 404])
+        return code == 200 ? data : nil
+    }
+
     public func restore() async throws -> RestoreSnapshot {
         let (data, _) = try await send(request("restore/extras", method: "GET", timeout: 60))
         do { return try ExtrasCodec.wireDecoder.decode(RestoreSnapshot.self, from: data) }

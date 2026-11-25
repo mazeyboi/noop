@@ -6,6 +6,7 @@ final class FakeServer: @unchecked Sendable {
     var ingested: [String: [[String: Any]]] = [:]     // kind -> records as JSON
     var batches: [String: [Int]] = [:]                // kind -> batch sizes
     var photos: Set<String> = []
+    var photoBytes: [String: Data] = [:]              // what GET /photos/{id} returns
     var puts: [String] = []
     var badIds: Set<String> = []                      // ids the server rejects with 422
     var unreachable = false
@@ -38,6 +39,7 @@ final class FakeServer: @unchecked Sendable {
         if path.hasPrefix("/api/v1/photos/") {
             let id = String(path.dropFirst("/api/v1/photos/".count))
             if req.httpMethod == "HEAD" { return .http(photos.contains(id) ? 200 : 404, Data()) }
+            if req.httpMethod == "GET" { return photoBytes[id].map { .http(200, $0) } ?? .http(404, Data()) }
             if req.httpMethod == "PUT" {
                 XCTAssertEqual(req.value(forHTTPHeaderField: "Content-Type"), "image/jpeg")
                 photos.insert(id); puts.append(id)
@@ -255,6 +257,15 @@ final class SyncEngineTests: XCTestCase {
         let n = try await engine().restore(force: false)
         XCTAssertEqual(n, 1)
         XCTAssertEqual(try store.food(id: "f1")?.name, "Rugbrød")
+    }
+
+    func test_restore_downloads_missing_photos() async throws {
+        server.photoBytes["p1"] = Data([0xFF, 0xD8, 0x01])
+        server.snapshot = Data(#"{"foods":[],"meals":[],"targets":[],"food_entries":[],"photos":[{"id":"p1","sha256":"x"},{"id":"gone","sha256":"y"},{"id":"../evil","sha256":"z"}]}"#.utf8)
+        _ = try await engine().restore(force: false)
+        XCTAssertEqual(photos.data(id: "p1"), Data([0xFF, 0xD8, 0x01]))
+        XCTAssertNil(photos.data(id: "gone"))
+        XCTAssertTrue(try store.photosToUpload().isEmpty)
     }
 
     func test_restore_refuses_over_unsynced_changes() async throws {
